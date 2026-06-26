@@ -244,6 +244,7 @@ class CaixaApp(tk.Tk):
         self._resultados_busca: list = []
         self._feedback_apos_venda: str | None = None
         self._feedback_after_id: str | None = None
+        self._busca_after_id: str | None = None
         self._atualizando_responsavel = False
         self._layout_compacto = False
         self._bg_runner = AsyncTaskRunner(self.after)
@@ -731,6 +732,25 @@ class CaixaApp(tk.Tk):
         """Consulta o banco conforme o usuario digita e exibe sugestoes."""
         termo = self._var_busca.get().strip()
         if not termo or termo == PLACEHOLDER_BUSCA:
+            if self._busca_after_id:
+                self.after_cancel(self._busca_after_id)
+                self._busca_after_id = None
+            self._bg_runner.invalidate("busca-produtos")
+            self._esconder_sugestoes()
+            return
+        if self._busca_after_id:
+            self.after_cancel(self._busca_after_id)
+            self._busca_after_id = None
+        if len(termo) < 2:
+            self._bg_runner.invalidate("busca-produtos")
+            self._esconder_sugestoes()
+            return
+        self._busca_after_id = self.after(250, self._executar_busca_agendada)
+
+    def _executar_busca_agendada(self) -> None:
+        self._busca_after_id = None
+        termo = self._var_busca.get().strip()
+        if not termo or termo == PLACEHOLDER_BUSCA or len(termo) < 2:
             self._bg_runner.invalidate("busca-produtos")
             self._esconder_sugestoes()
             return
