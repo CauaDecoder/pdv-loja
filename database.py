@@ -1542,6 +1542,71 @@ def obter_movimentacoes_produto(produto_id: int, limite: int = 80) -> list[sqlit
     return listar_movimentacoes_estoque(produto_id=produto_id, limite=limite)
 
 
+def _config_int_seguro(config: dict[str, str], chave: str, padrao: int) -> int:
+    try:
+        return int(float(config.get(chave, padrao)))
+    except (TypeError, ValueError):
+        return padrao
+
+
+def _dashboard_cte_sql() -> str:
+    return """
+        WITH vendas_periodo AS (
+            SELECT
+                produto_id,
+                COALESCE(SUM(ABS(quantidade)), 0) AS total_vendido
+            FROM movimentacoes_estoque
+            WHERE tipo = 'VENDA'
+              AND data_iso >= ?
+            GROUP BY produto_id
+        ),
+        ultimo_movimento AS (
+            SELECT
+                produto_id,
+                MAX(data_iso) AS ultimo_movimento
+            FROM movimentacoes_estoque
+            GROUP BY produto_id
+        ),
+        base AS (
+            SELECT
+                p.id,
+                p.codigo,
+                p.nome,
+                p.ativo,
+                p.estoque,
+                COALESCE(p.estoque_minimo, 0) AS estoque_minimo,
+                COALESCE(p.ponto_pedido, 0) AS ponto_pedido,
+                COALESCE(p.custo_unitario, 0) AS custo_unitario,
+                COALESCE(p.preco, 0) AS preco,
+                COALESCE(v.total_vendido, 0) AS total_vendido,
+                u.ultimo_movimento,
+                COALESCE(p.estoque, 0) * COALESCE(p.custo_unitario, 0) AS valor_custo,
+                COALESCE(p.estoque, 0) * COALESCE(p.preco, 0) AS valor_venda,
+                CASE
+                    WHEN COALESCE(p.ativo, 1) = 0 THEN 'INATIVO'
+                    WHEN COALESCE(p.estoque, 0) <= COALESCE(p.estoque_minimo, 0) THEN 'CRITICO'
+                    WHEN COALESCE(p.ponto_pedido, 0) > 0
+                         AND COALESCE(p.estoque, 0) <= COALESCE(p.ponto_pedido, 0) THEN 'ALERTA'
+                    WHEN COALESCE(v.total_vendido, 0) = 0
+                         AND u.ultimo_movimento IS NOT NULL
+                         AND u.ultimo_movimento <= ? THEN 'MORTO'
+                    ELSE 'OK'
+                END AS status
+            FROM produtos p
+            LEFT JOIN vendas_periodo v ON v.produto_id = p.id
+            LEFT JOIN ultimo_movimento u ON u.produto_id = p.id
+        )
+    """
+
+
+def _dashboard_params(config: dict[str, str]) -> tuple[str, str]:
+    janela = _config_int_seguro(config, "demanda_janela_dias", 30)
+    morto_dias = _config_int_seguro(config, "estoque_morto_dias", 90)
+    data_vendas = (datetime.now() - timedelta(days=janela)).strftime("%Y-%m-%d")
+    data_morto = (datetime.now() - timedelta(days=morto_dias)).strftime("%Y-%m-%d")
+    return data_vendas, data_morto
+
+
 def _indicadores_dashboard() -> list[dict]:
     from estoque import calculos
 
@@ -1553,36 +1618,82 @@ def _indicadores_dashboard() -> list[dict]:
 
 def dashboard_resumo_estoque() -> dict:
     """Retorna os cards principais da dashboard de estoque."""
-    indicadores = _indicadores_dashboard()
-    ativos = [p for p in indicadores if int(p.get("ativo") or 0) == 1]
-    criticos = sum(1 for p in ativos if p["status"] == "CRITICO")
-    alertas = sum(1 for p in ativos if p["status"] == "ALERTA")
-    mortos = sum(1 for p in ativos if p["status"] == "MORTO")
-    valor_custo = sum(float(p.get("valor_estoque") or 0) for p in ativos)
-    valor_venda = sum(
-        int(p.get("estoque") or 0) * float(p.get("preco") or 0)
-        for p in ativos
-    )
+    config = configuracoes()
+    params = _dashboard_params(config)
+    cte = _dashboard_cte_sql()
+    with get_conn() as conn:
+        resumo = conn.execute(
+            f"""
+            {cte}
+            SELECT
+                COUNT(*) FILTER (WHERE ativo = 1) AS skus_ativos,
+                COUNT(*) FILTER (WHERE ativo = 1 AND status = 'CRITICO') AS produtos_criticos,
+                COUNT(*) FILTER (WHERE ativo = 1 AND status = 'ALERTA') AS produtos_alerta,
+                COUNT(*) FILTER (WHERE ativo = 1 AND status = 'MORTO') AS produtos_sem_giro,
+                COALESCE(SUM(valor_custo) FILTER (WHERE ativo = 1), 0) AS valor_total_custo,
+                COALESCE(SUM(valor_venda) FILTER (WHERE ativo = 1), 0) AS valor_total_venda,
+                COUNT(*) FILTER (WHERE ativo = 1 AND custo_unitario <= 0) AS sem_custo,
+                COUNT(*) FILTER (WHERE ativo = 1 AND estoque_minimo <= 0) AS sem_estoque_minimo
+            FROM base
+            """,
+            params,
+        ).fetchone()
+        produtos_acao = conn.execute(
+            f"""
+            {cte}
+            SELECT
+                codigo,
+                nome,
+                status,
+                estoque,
+                estoque_minimo,
+                valor_custo AS valor_estoque
+            FROM base
+            WHERE ativo = 1
+              AND status IN ('CRITICO', 'ALERTA', 'MORTO')
+            ORDER BY
+                CASE status
+                    WHEN 'CRITICO' THEN 0
+                    WHEN 'ALERTA' THEN 1
+                    WHEN 'MORTO' THEN 2
+                    ELSE 9
+                END,
+                nome
+            LIMIT 12
+            """,
+            params,
+        ).fetchall()
     return {
-        "skus_ativos": len(ativos),
-        "produtos_criticos": criticos,
-        "produtos_alerta": alertas,
-        "produtos_sem_giro": mortos,
-        "valor_total_custo": valor_custo,
-        "valor_total_venda": valor_venda,
-        "sem_custo": sum(1 for p in ativos if float(p.get("custo_unitario") or 0) <= 0),
-        "sem_estoque_minimo": sum(1 for p in ativos if int(p.get("estoque_minimo") or 0) <= 0),
-        "produtos_acao": [
-            p for p in indicadores if p["status"] in {"CRITICO", "ALERTA", "MORTO"}
-        ][:12],
+        "skus_ativos": resumo["skus_ativos"] or 0,
+        "produtos_criticos": resumo["produtos_criticos"] or 0,
+        "produtos_alerta": resumo["produtos_alerta"] or 0,
+        "produtos_sem_giro": resumo["produtos_sem_giro"] or 0,
+        "valor_total_custo": resumo["valor_total_custo"] or 0,
+        "valor_total_venda": resumo["valor_total_venda"] or 0,
+        "sem_custo": resumo["sem_custo"] or 0,
+        "sem_estoque_minimo": resumo["sem_estoque_minimo"] or 0,
+        "produtos_acao": [dict(row) for row in produtos_acao],
     }
 
 
 def dashboard_status_estoque() -> list[dict]:
     """Retorna a contagem de produtos por status."""
+    config = configuracoes()
+    params = _dashboard_params(config)
+    cte = _dashboard_cte_sql()
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""
+            {cte}
+            SELECT status, COUNT(*) AS total
+            FROM base
+            GROUP BY status
+            """,
+            params,
+        ).fetchall()
     contagem = {"CRITICO": 0, "ALERTA": 0, "OK": 0, "MORTO": 0, "INATIVO": 0}
-    for produto in _indicadores_dashboard():
-        contagem[produto.get("status") or "OK"] = contagem.get(produto.get("status") or "OK", 0) + 1
+    for row in rows:
+        contagem[row["status"]] = row["total"]
     return [{"status": status, "total": total} for status, total in contagem.items()]
 
 
