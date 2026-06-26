@@ -26,6 +26,7 @@ from tkinter import filedialog, messagebox, ttk
 import database as db
 import relatorio as rel
 from app.services import backup_service, importacao_service
+from app.ui.async_runner import AsyncTaskRunner
 from app.ui.components import (
     Card,
     DataTable,
@@ -80,6 +81,7 @@ class MovimentacoesEstoque(tk.Frame):
         self._var_fim = tk.StringVar()
         self._var_tipo = tk.StringVar(value="Todos")
         self._var_termo = tk.StringVar()
+        self._bg_runner = AsyncTaskRunner(self.after)
         self._build_ui()
         self.atualizar()
 
@@ -244,10 +246,13 @@ class CaixaApp(tk.Tk):
         self._feedback_after_id: str | None = None
         self._atualizando_responsavel = False
         self._layout_compacto = False
+        self._bg_runner = AsyncTaskRunner(self.after)
+        self._historico_carregando = False
 
         self._frame_sugestoes: tk.Frame | None = None
         self._lst_sugestoes: tk.Listbox | None = None
         self._historico_tree: ttk.Treeview | None = None
+        self._lbl_historico_status: tk.Label | None = None
         self._right_canvas: tk.Canvas | None = None
         self._right_window: int | None = None
         self._compacto_altura = False
@@ -719,14 +724,25 @@ class CaixaApp(tk.Tk):
     # ------------------------------------------------------------------
     # Busca de produtos
     # ------------------------------------------------------------------
+    def _buscar_produtos_sync(self, termo: str):
+        return list(db.buscar_produto(termo))
+
     def _on_busca(self, *_):
         """Consulta o banco conforme o usuario digita e exibe sugestoes."""
         termo = self._var_busca.get().strip()
         if not termo or termo == PLACEHOLDER_BUSCA:
+            self._bg_runner.invalidate("busca-produtos")
             self._esconder_sugestoes()
             return
+        self._bg_runner.submit(
+            "busca-produtos",
+            lambda: self._buscar_produtos_sync(termo),
+            lambda resultados: self._aplicar_resultados_busca(termo, resultados),
+        )
 
-        resultados = db.buscar_produto(termo)
+    def _aplicar_resultados_busca(self, termo: str, resultados: list) -> None:
+        if termo != self._var_busca.get().strip():
+            return
         if not resultados or not self._lst_sugestoes or not self._frame_sugestoes:
             self._esconder_sugestoes()
             return
@@ -1531,13 +1547,31 @@ class CaixaApp(tk.Tk):
     # ------------------------------------------------------------------
     # Historico e edicao de vendas
     # ------------------------------------------------------------------
+    def _carregar_historico_sync(self) -> list[dict]:
+        if not self._periodo_id:
+            return []
+        return [dict(venda) for venda in db.ultimas_vendas_periodo(self._periodo_id)]
+
     def _atualizar_historico(self):
         """Recarrega a grade com as ultimas vendas do periodo atual."""
         if not self._historico_tree or not self._periodo_id:
             return
+        self._historico_carregando = True
+        if self._lbl_historico_status is not None:
+            self._lbl_historico_status.config(text="Carregando vendas...")
+        self._bg_runner.submit(
+            "historico-vendas",
+            self._carregar_historico_sync,
+            self._aplicar_historico,
+            self._falha_historico,
+        )
+
+    def _aplicar_historico(self, vendas: list[dict]) -> None:
+        if not self._historico_tree:
+            return
         for item in self._historico_tree.get_children():
             self._historico_tree.delete(item)
-        for venda in db.ultimas_vendas_periodo(self._periodo_id):
+        for venda in vendas:
             detalhe = (venda["pagamento_detalhe"] or "").strip()
             if detalhe:
                 pagamento = f"{venda['pagamento']} | {detalhe}"
@@ -1558,6 +1592,15 @@ class CaixaApp(tk.Tk):
                     venda["responsavel"] or "",
                 ),
             )
+        self._historico_carregando = False
+        if self._lbl_historico_status is not None:
+            self._lbl_historico_status.config(text=f"{len(vendas)} vendas carregadas")
+
+    def _falha_historico(self, exc: Exception) -> None:
+        self._historico_carregando = False
+        if self._lbl_historico_status is not None:
+            self._lbl_historico_status.config(text="Falha ao carregar vendas")
+        messagebox.showerror("Erro ao carregar histórico", str(exc))
 
     def _atualizar_painel_estoque(self):
         """Sincroniza a aba de estoque apos vendas ou importacoes."""
@@ -1930,17 +1973,30 @@ def _patched_movimentacoes_build_ui(self):
 
 def _patched_movimentacoes_atualizar(self):
     """Atualiza a grade de movimentacoes e o contador visual."""
+    if hasattr(self, "_lbl_mov_resultados"):
+        self._lbl_mov_resultados.config(text="Carregando registros...")
+    tipo = "" if self._var_tipo.get() == "Todos" else self._var_tipo.get()
+    self._bg_runner.submit(
+        "movimentacoes-estoque",
+        lambda: [
+            dict(mov)
+            for mov in db.listar_movimentacoes_estoque(
+                limite=500,
+                data_inicio=self._var_inicio.get().strip(),
+                data_fim=self._var_fim.get().strip(),
+                tipo=tipo,
+                termo=self._var_termo.get().strip(),
+            )
+        ],
+        lambda movimentos: _patched_movimentacoes_aplicar(self, movimentos),
+        lambda exc: _patched_movimentacoes_erro(self, exc),
+    )
+
+
+def _patched_movimentacoes_aplicar(self, movimentos):
+    """Aplica o resultado do carregamento de movimentacoes na UI."""
     for item in self._tree.get_children():
         self._tree.delete(item)
-
-    tipo = "" if self._var_tipo.get() == "Todos" else self._var_tipo.get()
-    movimentos = db.listar_movimentacoes_estoque(
-        limite=500,
-        data_inicio=self._var_inicio.get().strip(),
-        data_fim=self._var_fim.get().strip(),
-        tipo=tipo,
-        termo=self._var_termo.get().strip(),
-    )
     for mov in movimentos:
         self._tree.insert(
             "",
@@ -1959,6 +2015,13 @@ def _patched_movimentacoes_atualizar(self):
         )
     if hasattr(self, "_lbl_mov_resultados"):
         self._lbl_mov_resultados.config(text=f"{len(movimentos)} registros")
+
+
+def _patched_movimentacoes_erro(self, exc):
+    """Mostra o erro de carregamento sem travar a UI."""
+    if hasattr(self, "_lbl_mov_resultados"):
+        self._lbl_mov_resultados.config(text="Falha ao carregar registros")
+    messagebox.showerror("Erro ao carregar movimentações", str(exc))
 
 
 def _patched_configuracoes_build_ui(self):
@@ -2119,6 +2182,14 @@ def _patched_build_history_tab(self):
 
     acoes = tk.Frame(pad, bg=FUNDO)
     acoes.pack(fill="x", pady=(10, 0))
+    self._lbl_historico_status = tk.Label(
+        acoes,
+        text="0 vendas carregadas",
+        bg=FUNDO,
+        fg=COLORS["text_tertiary"],
+        font=FONTES["corpo"],
+    )
+    self._lbl_historico_status.pack(side="left")
     action_button(acoes, text="Atualizar", command=self._atualizar_historico, variant="secondary").pack(side="right")
     action_button(acoes, text="Editar venda selecionada", command=self._editar_venda_selecionada, variant="primary").pack(side="right", padx=(0, 8))
 

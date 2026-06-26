@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import database as db
+from app.ui.async_runner import AsyncTaskRunner
 from app.ui.components import Card, DataTable, EmptyState, PageHeader
 from tema import AZUL, BRANCO, COLORS, ESPACOS, FONTES, FUNDO, MUTED, TEXTO, VERDE_ESC, VERMELHO, moeda
 
@@ -67,6 +68,8 @@ class DashboardEstoque(tk.Frame):
         self._acoes_tree: ttk.Treeview | None = None
         self._canvas: tk.Canvas | None = None
         self._scroll_widgets: set[str] = set()
+        self._bg_runner = AsyncTaskRunner(self.after)
+        self._dados_dashboard: dict[str, object] = {}
         self._build_ui()
         self.atualizar()
 
@@ -157,7 +160,26 @@ class DashboardEstoque(tk.Frame):
         self._cards[chave] = value
 
     def atualizar(self):
-        resumo = db.dashboard_resumo_estoque()
+        self._bg_runner.submit(
+            "dashboard-estoque",
+            self._carregar_dashboard_sync,
+            self._aplicar_dashboard,
+        )
+
+    def _carregar_dashboard_sync(self) -> dict[str, object]:
+        return {
+            "resumo": db.dashboard_resumo_estoque(),
+            "status": db.dashboard_status_estoque(),
+            "curva_abc": db.dashboard_curva_abc(),
+            "categorias": db.dashboard_valor_por_categoria(),
+            "valor_parado": db.dashboard_top_valor_parado(),
+            "vendidos": db.dashboard_top_vendidos(),
+            "movimentos": db.dashboard_movimentacoes_periodo(),
+        }
+
+    def _aplicar_dashboard(self, dados: dict[str, object]) -> None:
+        self._dados_dashboard = dados
+        resumo = dados["resumo"]
         for chave, label in self._cards.items():
             valor = resumo.get(chave, 0)
             label.config(text=moeda(valor) if chave.startswith("valor_") else str(valor))
@@ -203,7 +225,7 @@ class DashboardEstoque(tk.Frame):
                     self._bind_mousewheel_recursivo(grafico.get_tk_widget())
 
     def _grafico_status(self, figura):
-        dados = db.dashboard_status_estoque()
+        dados = self._dados_dashboard.get("status", [])
         ax = figura.axes[0]
         labels = [d["status"] for d in dados]
         valores = [d["total"] for d in dados]
@@ -211,7 +233,7 @@ class DashboardEstoque(tk.Frame):
         ax.tick_params(labelsize=8, colors=COLORS["text_secondary"])
 
     def _grafico_abc(self, figura):
-        dados = db.dashboard_curva_abc()
+        dados = self._dados_dashboard.get("curva_abc", [])
         ax = figura.axes[0]
         valores = [d["total"] for d in dados if d["total"]]
         labels = [d["curva"] for d in dados if d["total"]]
@@ -225,25 +247,25 @@ class DashboardEstoque(tk.Frame):
             )
 
     def _grafico_categorias(self, figura):
-        dados = list(reversed(db.dashboard_valor_por_categoria()))
+        dados = list(reversed(self._dados_dashboard.get("categorias", [])))
         ax = figura.axes[0]
         ax.barh([d["categoria"][:26] for d in dados], [d["valor"] for d in dados], color=AZUL)
         ax.tick_params(labelsize=8, colors=COLORS["text_secondary"])
 
     def _grafico_valor_parado(self, figura):
-        dados = list(reversed(db.dashboard_top_valor_parado()))
+        dados = list(reversed(self._dados_dashboard.get("valor_parado", [])))
         ax = figura.axes[0]
         ax.barh([d["nome"][:26] for d in dados], [d["valor"] for d in dados], color=VERDE_ESC)
         ax.tick_params(labelsize=8, colors=COLORS["text_secondary"])
 
     def _grafico_vendidos(self, figura):
-        dados = list(reversed(db.dashboard_top_vendidos()))
+        dados = list(reversed(self._dados_dashboard.get("vendidos", [])))
         ax = figura.axes[0]
         ax.barh([d["nome"][:26] for d in dados], [d["quantidade"] for d in dados], color=AZUL)
         ax.tick_params(labelsize=8, colors=COLORS["text_secondary"])
 
     def _grafico_movimentos(self, figura):
-        dados = db.dashboard_movimentacoes_periodo()
+        dados = self._dados_dashboard.get("movimentos", [])
         ax = figura.axes[0]
         datas = [d["data_iso"][5:] for d in dados]
         ax.plot(datas, [d["entradas"] or 0 for d in dados], label="Entradas", color=VERDE_ESC, linewidth=2)

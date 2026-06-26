@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import database as db
+from app.ui.async_runner import AsyncTaskRunner
 from app.ui.components import Card, PageHeader, action_button, apply_button_style, styled_checkbox, styled_entry
 from estoque import calculos
 from estoque import relatorio_estoque
@@ -30,6 +31,7 @@ class PainelEstoque(tk.Frame):
         self._var_sem_movimento = tk.BooleanVar(value=False)
         self._categorias = ["Todas"]
         self._fornecedores = ["Todos"]
+        self._bg_runner = AsyncTaskRunner(self.after)
         self._build_ui()
         self.atualizar()
 
@@ -191,28 +193,55 @@ class PainelEstoque(tk.Frame):
             action_button(acoes, text=texto, command=cmd, variant=variant).grid(row=0, column=idx, sticky="ew", padx=4)
 
     def atualizar(self):
+        self._lbl_resultados.config(text="Carregando produtos...")
+        self._bg_runner.submit(
+            "painel-estoque",
+            self._carregar_produtos_sync,
+            self._aplicar_produtos_carregados,
+            self._falha_carregamento_produtos,
+        )
+
+    def _carregar_produtos_sync(self) -> dict:
         produtos = db.listar_produtos_estoque(incluir_inativos=True)
         config = db.configuracoes()
-        self._categorias = ["Todas"] + db.opcoes_produtos("categoria")
-        self._fornecedores = ["Todos"] + db.opcoes_produtos("fornecedor")
+        categorias = ["Todas"] + db.opcoes_produtos("categoria")
+        fornecedores = ["Todos"] + db.opcoes_produtos("fornecedor")
+        with db.get_conn() as conn:
+            indicadores = calculos.indicadores_produtos(conn, produtos, config)
+        resumo = calculos.resumo_estoque(indicadores)
+        ativos = sum(1 for produto in indicadores if int(produto.get("ativo") or 1) == 1)
+        sem_custo = sum(1 for produto in indicadores if float(produto.get("custo_unitario") or 0) <= 0)
+        return {
+            "produtos": indicadores,
+            "categorias": categorias,
+            "fornecedores": fornecedores,
+            "resumo": resumo,
+            "ativos": ativos,
+            "sem_custo": sem_custo,
+        }
+
+    def _aplicar_produtos_carregados(self, dados: dict) -> None:
+        self._produtos = dados["produtos"]
+        self._categorias = dados["categorias"]
+        self._fornecedores = dados["fornecedores"]
         self._categoria_box.configure(values=self._categorias)
         self._fornecedor_box.configure(values=self._fornecedores)
         if self._var_categoria.get() not in self._categorias:
             self._var_categoria.set("Todas")
         if self._var_fornecedor.get() not in self._fornecedores:
             self._var_fornecedor.set("Todos")
-        with db.get_conn() as conn:
-            self._produtos = calculos.indicadores_produtos(conn, produtos, config)
-        resumo = calculos.resumo_estoque(self._produtos)
-        ativos = sum(1 for produto in self._produtos if int(produto.get("ativo") or 1) == 1)
-        sem_custo = sum(1 for produto in self._produtos if float(produto.get("custo_unitario") or 0) <= 0)
-        self._resumo_labels["ativos"].config(text=str(ativos), fg=VERDE_ESC)
+        resumo = dados["resumo"]
+        self._resumo_labels["ativos"].config(text=str(dados["ativos"]), fg=VERDE_ESC)
         self._resumo_labels["criticos"].config(text=str(resumo["criticos"]), fg=VERMELHO)
         self._resumo_labels["valor_total_venda"].config(text=moeda(resumo["valor_total_venda"]), fg=VERDE_ESC)
         self._resumo_labels["alertas"].config(text=str(resumo["alertas"]), fg=COLORS["warning_dot"])
-        self._resumo_labels["sem_custo"].config(text=str(sem_custo), fg=COLORS["warning_dot"])
+        self._resumo_labels["sem_custo"].config(text=str(dados["sem_custo"]), fg=COLORS["warning_dot"])
         self._resumo_labels["mortos"].config(text=str(resumo["mortos"]), fg=COLORS["text_secondary"])
         self._renderizar_tabela()
+
+    def _falha_carregamento_produtos(self, exc: Exception) -> None:
+        self._lbl_resultados.config(text="Falha ao carregar produtos")
+        messagebox.showerror("Erro ao carregar produtos", str(exc))
 
     def _produtos_filtrados(self) -> list[dict]:
         termo = self._var_busca.get().strip().lower()
