@@ -130,6 +130,7 @@ def inicializar():
         _garantir_colunas_vendas(conn)
         _garantir_colunas_produtos(conn)
         _criar_tabelas_estoque(conn)
+        _criar_indices_desempenho(conn)
         _seed_configuracoes(conn)
         conn.execute(
             """
@@ -227,6 +228,33 @@ def _criar_tabelas_estoque(conn: sqlite3.Connection):
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mov_venda_ref_produto
             ON movimentacoes_estoque(referencia, produto_id, tipo)
             WHERE tipo = 'VENDA';
+        """
+    )
+
+
+def _criar_indices_desempenho(conn: sqlite3.Connection):
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_produtos_nome
+            ON produtos(nome);
+        CREATE INDEX IF NOT EXISTS idx_produtos_ativo
+            ON produtos(ativo);
+        CREATE INDEX IF NOT EXISTS idx_produtos_ativo_nome
+            ON produtos(ativo, nome);
+        CREATE INDEX IF NOT EXISTS idx_produtos_categoria
+            ON produtos(categoria);
+        CREATE INDEX IF NOT EXISTS idx_produtos_fornecedor
+            ON produtos(fornecedor);
+        CREATE INDEX IF NOT EXISTS idx_produtos_curva_abc
+            ON produtos(curva_abc);
+
+        CREATE INDEX IF NOT EXISTS idx_mov_data_iso_hora_id
+            ON movimentacoes_estoque(data_iso DESC, hora DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_mov_produto_data_hora
+            ON movimentacoes_estoque(produto_id, data_iso DESC, hora DESC, id DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_vendas_periodo_num
+            ON vendas(periodo_id, num_venda DESC);
         """
     )
 
