@@ -249,6 +249,8 @@ class CaixaApp(tk.Tk):
         self._layout_compacto = False
         self._bg_runner = AsyncTaskRunner(self.after)
         self._historico_carregando = False
+        self._abas_carregadas = {"Venda"}
+        self._subabas_estoque_carregadas: set[str] = set()
 
         self._frame_sugestoes: tk.Frame | None = None
         self._lst_sugestoes: tk.Listbox | None = None
@@ -314,8 +316,6 @@ class CaixaApp(tk.Tk):
         self._build_left(self._body)
         self._build_right(self._body)
         self._build_footer(self)
-        self._build_history_tab()
-        self._build_estoque_tab()
         self._notebook.bind("<<NotebookTabChanged>>", self._on_aba_principal_change)
         self._secondary_nav.pack_forget()
         self._atualizar_nav_principal()
@@ -337,16 +337,14 @@ class CaixaApp(tk.Tk):
         self._estoque_notebook.add(aba_produtos, text="Produtos")
         self._estoque_notebook.add(aba_movimentacoes, text="Movimentações")
         self._estoque_notebook.add(aba_config, text="Configurações")
-
-        self._estoque_dashboard = DashboardEstoque(aba_dashboard)
-        self._estoque_dashboard.pack(fill="both", expand=True)
-        self._estoque_panel = PainelEstoque(aba_produtos)
-        self._estoque_panel.pack(fill="both", expand=True)
-        self._estoque_movimentacoes = MovimentacoesEstoque(aba_movimentacoes)
-        self._estoque_movimentacoes.pack(fill="both", expand=True)
-        self._estoque_configuracoes = ConfiguracoesEstoque(aba_config)
-        self._estoque_configuracoes.pack(fill="both", expand=True)
+        self._estoque_frames = {
+            "Dashboard": aba_dashboard,
+            "Produtos": aba_produtos,
+            "Movimentações": aba_movimentacoes,
+            "Configurações": aba_config,
+        }
         self._estoque_notebook.bind("<<NotebookTabChanged>>", self._on_subaba_estoque_change)
+        self._carregar_subaba_estoque_atual()
 
     def _build_topbar(self):
         """Cria o cabecalho com titulo, data, horario e numero da venda."""
@@ -424,15 +422,55 @@ class CaixaApp(tk.Tk):
 
     def _mudar_subaba_estoque(self, index: int):
         """Seleciona uma das subabas do modulo de estoque."""
-        self._estoque_notebook.select(index)
+        if hasattr(self, "_estoque_notebook"):
+            self._estoque_notebook.select(index)
 
     def _on_aba_principal_change(self, _event=None):
         """Sincroniza o estado visual da navegacao principal."""
         self._atualizar_nav_principal()
+        self._carregar_aba_principal_atual()
 
     def _on_subaba_estoque_change(self, _event=None):
         """Sincroniza o estado visual da subnavegacao de estoque."""
         self._atualizar_subnav_estoque()
+        self._carregar_subaba_estoque_atual()
+
+    def _carregar_aba_principal_atual(self) -> None:
+        indice = self._notebook.index(self._notebook.select())
+        nome_aba = self._notebook.tab(indice, "text")
+        if nome_aba in self._abas_carregadas:
+            if nome_aba == "Estoque":
+                self._carregar_subaba_estoque_atual()
+            return
+        if nome_aba == "Últimas vendas":
+            self._build_history_tab()
+            self._atualizar_historico()
+        elif nome_aba == "Estoque":
+            self._build_estoque_tab()
+            self._atualizar_subnav_estoque()
+        self._abas_carregadas.add(nome_aba)
+
+    def _carregar_subaba_estoque_atual(self) -> None:
+        if not hasattr(self, "_estoque_notebook"):
+            return
+        indice = self._estoque_notebook.index(self._estoque_notebook.select())
+        nome_aba = self._estoque_notebook.tab(indice, "text")
+        if nome_aba in self._subabas_estoque_carregadas:
+            return
+        frame = self._estoque_frames[nome_aba]
+        if nome_aba == "Dashboard":
+            self._estoque_dashboard = DashboardEstoque(frame)
+            self._estoque_dashboard.pack(fill="both", expand=True)
+        elif nome_aba == "Produtos":
+            self._estoque_panel = PainelEstoque(frame)
+            self._estoque_panel.pack(fill="both", expand=True)
+        elif nome_aba == "Movimentações":
+            self._estoque_movimentacoes = MovimentacoesEstoque(frame)
+            self._estoque_movimentacoes.pack(fill="both", expand=True)
+        elif nome_aba == "Configurações":
+            self._estoque_configuracoes = ConfiguracoesEstoque(frame)
+            self._estoque_configuracoes.pack(fill="both", expand=True)
+        self._subabas_estoque_carregadas.add(nome_aba)
 
     def _atualizar_nav_principal(self):
         """Atualiza destaque da navegacao principal e visibilidade da subnav."""
@@ -454,6 +492,8 @@ class CaixaApp(tk.Tk):
 
     def _atualizar_subnav_estoque(self):
         """Atualiza destaque da subnavegacao do modulo de estoque."""
+        if not hasattr(self, "_estoque_notebook"):
+            return
         atual = self._estoque_notebook.index(self._estoque_notebook.select())
         for idx, botao in enumerate(self._secondary_nav_buttons):
             ativo = idx == atual
