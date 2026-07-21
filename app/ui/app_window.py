@@ -26,7 +26,18 @@ from tkinter import filedialog, messagebox, ttk
 import database as db
 import relatorio as rel
 from app.services import backup_service, importacao_service
-from app.ui.components import Card, DataTable, EmptyState, LabeledField, PageHeader, SearchInput, SectionHeader, StatusBadge, configure_styles
+from app.ui.components import (
+    Card,
+    DataTable,
+    EmptyState,
+    LabeledField,
+    PageHeader,
+    SearchInput,
+    SectionHeader,
+    StatusBadge,
+    action_button,
+    configure_styles,
+)
 from app.ui.importacao_dialog import confirmar_importacao
 from estoque.dashboard import DashboardEstoque
 from estoque.painel import PainelEstoque
@@ -34,11 +45,13 @@ from tema import (
     AZUL,
     BORDA,
     BRANCO,
+    FONTES,
     FUNDO,
     FUNDO2,
     MUTED,
     PGTO_BG,
     PGTO_FG,
+    TEMA_ATUAL,
     TEXTO,
     VERDE_CLAR,
     VERDE_ESC,
@@ -47,7 +60,6 @@ from tema import (
     definir_tema_atual,
     moeda,
     obter_nome_tema_atual,
-    registrar_listener_tema,
 )
 
 # Listas de apoio usadas em dialogs e validacoes.
@@ -59,8 +71,6 @@ PLACEHOLDER_BUSCA = "Escaneie o código ou busque pelo nome"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RELATORIOS_DIR = PROJECT_ROOT / "relatorios"
 BACKUPS_DIR = PROJECT_ROOT / "backups"
-
-
 class MovimentacoesEstoque(tk.Frame):
     """Historico geral das movimentacoes de estoque."""
 
@@ -143,7 +153,7 @@ class MovimentacoesEstoque(tk.Frame):
 
 
 class ConfiguracoesEstoque(tk.Frame):
-    """Tela simples para parametros de estoque e configuracoes visuais."""
+    """Tela simples para parametros de estoque e curva ABC."""
 
     CAMPOS = (
         ("abc_metodo", "Metodo ABC"),
@@ -157,49 +167,13 @@ class ConfiguracoesEstoque(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=FUNDO)
         self._vars: dict[str, tk.StringVar] = {}
-        self._var_tema = tk.StringVar(value=obter_nome_tema_atual())
         self._build_ui()
         self.atualizar()
 
     def _build_ui(self):
         frame = Card(self, padding=18)
         frame.pack(fill="both", expand=True, padx=18, pady=16)
-        PageHeader(frame, "Configurações de estoque e sistema", "Parâmetros de reposição e aparência visual").pack(fill="x")
-        
-        # Secao de Tema Visual
-        sec_tema = tk.Frame(frame, bg=BRANCO)
-        sec_tema.pack(fill="x", pady=(16, 12))
-        SectionHeader(sec_tema, "Aparência e Tema", "Escolha manual entre tema claro e tema escuro").pack(fill="x")
-
-        linha_tema = tk.Frame(sec_tema, bg=BRANCO)
-        linha_tema.pack(fill="x", pady=(8, 0))
-
-        rb_claro = tk.Radiobutton(
-            linha_tema,
-            text="Tema Claro (Padrão)",
-            value="claro",
-            variable=self._var_tema,
-            bg=BRANCO,
-            fg=TEXTO,
-            font=("Segoe UI", 10, "bold"),
-            cursor="hand2",
-            command=self._trocar_tema,
-        )
-        rb_claro.pack(side="left", padx=(0, 20))
-
-        rb_escuro = tk.Radiobutton(
-            linha_tema,
-            text="Tema Escuro",
-            value="escuro",
-            variable=self._var_tema,
-            bg=BRANCO,
-            fg=TEXTO,
-            font=("Segoe UI", 10, "bold"),
-            cursor="hand2",
-            command=self._trocar_tema,
-        )
-        rb_escuro.pack(side="left")
-
+        PageHeader(frame, "Configurações de estoque", "Parâmetros de curva ABC e reposição automática").pack(fill="x")
         form = tk.Frame(frame, bg=BRANCO)
         form.pack(fill="x", pady=(16, 0))
         descricoes = {
@@ -230,14 +204,10 @@ class ConfiguracoesEstoque(tk.Frame):
             self._vars[chave] = var
         tk.Button(frame, text="✓ Salvar configurações", bg=VERDE_ESC, fg=BRANCO, relief="flat", font=("Segoe UI", 10, "bold"), command=self._salvar).pack(anchor="e", pady=(6, 0))
 
-    def _trocar_tema(self):
-        definir_tema_atual(self._var_tema.get())
-
     def atualizar(self):
         config = db.configuracoes()
         for chave, var in self._vars.items():
             var.set(config.get(chave, ""))
-        self._var_tema.set(obter_nome_tema_atual())
 
     def _salvar(self):
         db.atualizar_configuracoes({chave: var.get() for chave, var in self._vars.items()})
@@ -253,11 +223,10 @@ class CaixaApp(tk.Tk):
         self.title("Caixa - Loja da Basilica")
         self.geometry("1180x720")
         self.minsize(760, 560)
-        self.configure(bg=FUNDO)
+        self.configure(bg=TEMA_ATUAL["fundo"])
 
         db.inicializar()
-        configure_styles(self)
-        registrar_listener_tema(self._ao_alterar_tema)
+        configure_styles(self, obter_nome_tema_atual())
 
         self._data_hoje = datetime.now().strftime("%d/%m/%Y")
         self._periodo_id = 0
@@ -288,44 +257,36 @@ class CaixaApp(tk.Tk):
         self._atualizar_relogio()
         self._atualizar_status_fluxo()
 
-    def _ao_alterar_tema(self, tema: dict[str, str], nome: str):
-        """Re-aplica configuracoes visuais quando o tema e alterado dinamicamente."""
-        try:
-            self.configure(bg=tema["bg"])
-            configure_styles(self, nome)
-            if hasattr(self, "_content_wrap"):
-                self._content_wrap.configure(bg=tema["bg"])
-            if hasattr(self, "_aba_venda"):
-                self._aba_venda.configure(bg=tema["bg"])
-            if hasattr(self, "_aba_historico"):
-                self._aba_historico.configure(bg=tema["bg"])
-            if hasattr(self, "_aba_estoque"):
-                self._aba_estoque.configure(bg=tema["bg"])
-        except Exception:
-            pass
-
     # ------------------------------------------------------------------
     # Construcao da interface
     # ------------------------------------------------------------------
     def _build_ui(self):
         """Monta a estrutura base da janela e conecta os paineis principais."""
         self._build_topbar()
-        configure_styles(self)
+        configure_styles(self, obter_nome_tema_atual())
 
-        self._content_wrap = tk.Frame(self, bg=FUNDO)
+        self._content_wrap = tk.Frame(self, bg=TEMA_ATUAL["fundo"])
         self._content_wrap.pack(fill="both", expand=True)
 
         self._notebook = ttk.Notebook(self._content_wrap, style="TNotebook")
-        self._notebook.pack(fill="both", expand=True, padx=18, pady=(0, 0))
+        self._notebook.pack(fill="both", expand=True, padx=18, pady=(4, 0))
 
-        self._aba_venda = tk.Frame(self._notebook, bg=FUNDO)
-        self._aba_historico = tk.Frame(self._notebook, bg=FUNDO)
-        self._aba_estoque = tk.Frame(self._notebook, bg=FUNDO)
+        self._aba_venda = tk.Frame(self._notebook, bg=TEMA_ATUAL["fundo"])
+        self._aba_vendas_correcoes = tk.Frame(self._notebook, bg=TEMA_ATUAL["fundo"])
+        self._aba_historico = self._aba_vendas_correcoes
+        self._aba_estoque = tk.Frame(self._notebook, bg=TEMA_ATUAL["fundo"])
+        self._aba_importacao = tk.Frame(self._notebook, bg=TEMA_ATUAL["fundo"])
+        self._aba_relatorios = tk.Frame(self._notebook, bg=TEMA_ATUAL["fundo"])
+        self._aba_configuracoes = tk.Frame(self._notebook, bg=TEMA_ATUAL["fundo"])
+
         self._notebook.add(self._aba_venda, text="Venda")
-        self._notebook.add(self._aba_historico, text="Últimas vendas")
+        self._notebook.add(self._aba_vendas_correcoes, text="Vendas e correções")
         self._notebook.add(self._aba_estoque, text="Estoque")
+        self._notebook.add(self._aba_importacao, text="Importação")
+        self._notebook.add(self._aba_relatorios, text="Relatórios")
+        self._notebook.add(self._aba_configuracoes, text="Configurações")
 
-        self._body = tk.Frame(self._aba_venda, bg=FUNDO)
+        self._body = tk.Frame(self._aba_venda, bg=TEMA_ATUAL["fundo"])
         self._body.pack(fill="both", expand=True)
         self._body.columnconfigure(0, weight=1)
         self._body.columnconfigure(1, weight=0, minsize=300)
@@ -334,21 +295,24 @@ class CaixaApp(tk.Tk):
         self._build_left(self._body)
         self._build_right(self._body)
         self._build_footer(self._aba_venda)
-        self._build_history_tab()
+        self._build_vendas_correcoes_tab()
         self._build_estoque_tab()
+        self._build_importacao_tab()
+        self._build_relatorios_tab()
+        self._build_configuracoes_tab()
         self.bind("<Configure>", self._ajustar_layout_responsivo)
 
     def _build_estoque_tab(self):
         """Monta as subabas internas do modulo de estoque."""
-        estoque_wrap = tk.Frame(self._aba_estoque, bg=FUNDO)
+        estoque_wrap = tk.Frame(self._aba_estoque, bg=TEMA_ATUAL["fundo"])
         estoque_wrap.pack(fill="both", expand=True)
         self._estoque_notebook = ttk.Notebook(estoque_wrap, style="TNotebook")
         self._estoque_notebook.pack(fill="both", expand=True, padx=18, pady=(0, 0))
 
-        aba_dashboard = tk.Frame(self._estoque_notebook, bg=FUNDO)
-        aba_produtos = tk.Frame(self._estoque_notebook, bg=FUNDO)
-        aba_movimentacoes = tk.Frame(self._estoque_notebook, bg=FUNDO)
-        aba_config = tk.Frame(self._estoque_notebook, bg=FUNDO)
+        aba_dashboard = tk.Frame(self._estoque_notebook, bg=TEMA_ATUAL["fundo"])
+        aba_produtos = tk.Frame(self._estoque_notebook, bg=TEMA_ATUAL["fundo"])
+        aba_movimentacoes = tk.Frame(self._estoque_notebook, bg=TEMA_ATUAL["fundo"])
+        aba_config = tk.Frame(self._estoque_notebook, bg=TEMA_ATUAL["fundo"])
 
         self._estoque_notebook.add(aba_dashboard, text="Dashboard")
         self._estoque_notebook.add(aba_produtos, text="Produtos")
@@ -365,46 +329,47 @@ class CaixaApp(tk.Tk):
         self._estoque_configuracoes.pack(fill="both", expand=True)
 
     def _build_topbar(self):
-        """Cria o cabecalho com titulo, data, horario e numero da venda."""
-        bar = tk.Frame(self, bg="#1B1B1A", height=74)
+        """Cria o cabecalho com titulo, data, horario e numero da venda (Variante A)."""
+        bar = tk.Frame(self, bg="#171614", height=74)
         self._topbar = bar
         bar.pack(fill="x")
         bar.pack_propagate(False)
 
-        left = tk.Frame(bar, bg="#1B1B1A")
+        left = tk.Frame(bar, bg="#171614")
         self._topbar_left = left
         left.pack(side="left", padx=18, pady=12)
-        self._lbl_titulo = tk.Label(left, text="Loja da Basilica", bg="#1B1B1A", fg="#F6F4EF", font=("Segoe UI", 16, "bold"))
+        self._lbl_titulo = tk.Label(left, text="Loja da Basilica", bg="#171614", fg="#F7F2E7", font=("Segoe UI", 16, "bold"))
         self._lbl_titulo.pack(anchor="w")
         self._lbl_subtitulo = tk.Label(
             left,
             text="Caixa rápido para a operação diária da loja",
-            bg="#1B1B1A",
-            fg="#B9B4A9",
+            bg="#171614",
+            fg="#C9C0B0",
             font=("Segoe UI", 10),
         )
         self._lbl_subtitulo.pack(anchor="w", pady=(2, 0))
 
-        right = tk.Frame(bar, bg="#1B1B1A")
+        right = tk.Frame(bar, bg="#171614")
         self._topbar_right = right
         right.pack(side="right", padx=18, pady=12)
-        self._lbl_relogio = tk.Label(right, text="--:--", bg="#1B1B1A", fg="#F6F4EF", font=("Segoe UI", 11))
+        self._lbl_relogio = tk.Label(right, text="--:--", bg="#171614", fg="#F7F2E7", font=("Segoe UI", 11, "bold"))
         self._lbl_relogio.pack(anchor="e")
-        self._lbl_data = tk.Label(right, text=self._data_hoje, bg="#1B1B1A", fg="#B9B4A9", font=("Segoe UI", 9))
+        self._lbl_data = tk.Label(right, text=self._data_hoje, bg="#171614", fg="#C9C0B0", font=("Segoe UI", 9))
         self._lbl_data.pack(anchor="e")
         self._lbl_venda_num = tk.Label(
             right,
             text="",
             bg="#D5A33B",
-            fg="#1A1A1A",
+            fg="#171614",
             font=("Segoe UI", 10, "bold"),
             padx=10,
             pady=5,
         )
-        self._lbl_venda_num.pack(anchor="e", pady=(8, 0))
+        self._lbl_venda_num.pack(anchor="e", pady=(6, 0))
         self._atualizar_badge_venda()
 
-        tk.Frame(self, bg=BORDA, height=1).pack(fill="x")
+        self._topbar_gold_line = tk.Frame(self, bg="#C9972C", height=3)
+        self._topbar_gold_line.pack(fill="x")
 
     def _tab_style_name(self, label: str) -> str:
         return f"{label}.TNotebook"
@@ -576,15 +541,15 @@ class CaixaApp(tk.Tk):
         ):
             tk.Button(acoes_footer, text=label, bg=BRANCO, fg=fg, font=("Segoe UI", 9), relief="flat", cursor="hand2", padx=10, pady=8, command=callback).pack(side="right", padx=(0, 4))
 
-    def _build_history_tab(self):
-        """Monta a aba usada para consultar e editar vendas ja registradas."""
-        pad = tk.Frame(self._aba_historico, bg=FUNDO, padx=18, pady=16)
+    def _build_vendas_correcoes_tab(self):
+        """Monta a aba de Vendas e correções (evoluída de Últimas vendas)."""
+        pad = tk.Frame(self._aba_vendas_correcoes, bg=TEMA_ATUAL["fundo"], padx=18, pady=16)
         pad.pack(fill="both", expand=True)
 
         PageHeader(
             pad,
-            "Hist?rico das ?ltimas vendas",
-            "Use esta tela para consultar n?meros recentes sem exportar o relat?rio do per?odo.",
+            "Vendas e correções",
+            "Consulte vendas finalizadas e realize correções pós-venda ou cancelamentos.",
             "Atualizar",
             self._atualizar_historico,
         ).pack(fill="x", pady=(0, 12))
@@ -595,11 +560,11 @@ class CaixaApp(tk.Tk):
         colunas = ("venda", "hora", "total", "pagamento", "itens", "responsavel")
         titulos = {
             "venda": "Venda",
-            "hora": "Hor?rio",
+            "hora": "Horário",
             "total": "Total",
             "pagamento": "Pagamento",
             "itens": "Itens",
-            "responsavel": "Respons?vel",
+            "responsavel": "Responsável",
         }
         larguras = {"venda": 90, "hora": 90, "total": 120, "pagamento": 240, "itens": 100, "responsavel": 180}
         self._historico_tree = DataTable(card, colunas, titulos, larguras, height=14)
@@ -616,28 +581,223 @@ class CaixaApp(tk.Tk):
         card.columnconfigure(0, weight=1)
         card.rowconfigure(0, weight=1)
 
-        acoes = tk.Frame(pad, bg=FUNDO)
+        acoes = tk.Frame(pad, bg=TEMA_ATUAL["fundo"])
         acoes.pack(fill="x", pady=(10, 0))
-        tk.Button(
+        action_button(
             acoes,
-            text="Editar venda selecionada",
-            bg=VERDE_ESC,
-            fg=BRANCO,
-            font=("Segoe UI", 10, "bold"),
-            relief="flat",
-            cursor="hand2",
+            text="Editar / Corrigir venda",
+            bg=TEMA_ATUAL["primaria"],
+            fg="#FFFFFF",
             command=self._editar_venda_selecionada,
         ).pack(side="right")
-        tk.Button(
+        action_button(
             acoes,
             text="Atualizar",
-            bg=BRANCO,
-            fg=VERDE_ESC,
-            font=("Segoe UI", 9, "bold"),
-            relief="flat",
-            cursor="hand2",
+            bg=TEMA_ATUAL["surface"],
+            fg=TEMA_ATUAL["primaria"],
             command=self._atualizar_historico,
         ).pack(side="right", padx=(0, 8))
+
+    def _build_history_tab(self):
+        """Compatibilidade para montagem do histórico de vendas."""
+        self._build_vendas_correcoes_tab()
+
+    def _build_importacao_tab(self):
+        """Monta o frame da casca para a aba de Importação (preparatório para #13)."""
+        pad = tk.Frame(self._aba_importacao, bg=TEMA_ATUAL["fundo"], padx=18, pady=16)
+        pad.pack(fill="both", expand=True)
+
+        PageHeader(
+            pad,
+            "Importação de produtos",
+            "Fluxo guiado em etapas para importar planilhas e conferir impactos no estoque.",
+        ).pack(fill="x", pady=(0, 16))
+
+        card = Card(pad, padding=20)
+        card.pack(fill="x", pady=(0, 16))
+
+        SectionHeader(
+            card,
+            "Importação de produtos (Conta Azul)",
+            "Selecione um arquivo CSV/XLSX para atualizar o catálogo de produtos e saldos.",
+        ).pack(anchor="w", fill="x", pady=(0, 14))
+
+        tk.Label(
+            card,
+            text="O redesign completo em etapas (arquivo, modo, conferência e confirmação) será implementado na issue #13.",
+            bg=TEMA_ATUAL["surface"],
+            fg=TEMA_ATUAL["texto_suave"],
+            font=FONTES["corpo"],
+        ).pack(anchor="w", pady=(0, 16))
+
+        action_button(
+            card,
+            text="Iniciar importação de planilha",
+            command=self._importar_planilha,
+            bg=TEMA_ATUAL["primaria"],
+            fg="#FFFFFF",
+        ).pack(anchor="w")
+
+    def _build_relatorios_tab(self):
+        """Monta o frame da casca para a aba de Relatórios (preparatório para #14)."""
+        pad = tk.Frame(self._aba_relatorios, bg=TEMA_ATUAL["fundo"], padx=18, pady=16)
+        pad.pack(fill="both", expand=True)
+
+        PageHeader(
+            pad,
+            "Relatórios e fechamento",
+            "Consulte a movimentação financeira líquida e relatórios operacionais do período.",
+        ).pack(fill="x", pady=(0, 16))
+
+        card = Card(pad, padding=20)
+        card.pack(fill="x", pady=(0, 16))
+
+        SectionHeader(
+            card,
+            "Fechamento do Período",
+            "Exportação e conciliação financeira da operação diária.",
+        ).pack(anchor="w", fill="x", pady=(0, 14))
+
+        tk.Label(
+            card,
+            text="A separação visual de vendas válidas, canceladas e relatórios de estoque será implementada na issue #14.",
+            bg=TEMA_ATUAL["surface"],
+            fg=TEMA_ATUAL["texto_suave"],
+            font=FONTES["corpo"],
+        ).pack(anchor="w", pady=(0, 16))
+
+        action_button(
+            card,
+            text="Exportar relatório do período",
+            command=self._exportar_relatorio,
+            bg=TEMA_ATUAL["primaria"],
+            fg="#FFFFFF",
+        ).pack(anchor="w")
+
+    def _build_configuracoes_tab(self):
+        """Monta a aba de Configurações e Manutenção (Tema claro/escuro, Backup/Restauração)."""
+        pad = tk.Frame(self._aba_configuracoes, bg=TEMA_ATUAL["fundo"], padx=18, pady=16)
+        pad.pack(fill="both", expand=True)
+
+        PageHeader(
+            pad,
+            "Configurações e manutenção",
+            "Gerencie preferências visuais de tema, manutenção do banco de dados e backups.",
+        ).pack(fill="x", pady=(0, 16))
+
+        # Card de Tema
+        card_tema = Card(pad, padding=20)
+        card_tema.pack(fill="x", pady=(0, 16))
+
+        SectionHeader(
+            card_tema,
+            "Aparência e Tema Visual",
+            "Escolha o tema de cores para a interface do PDV. O padrão é o Tema Claro.",
+        ).pack(anchor="w", fill="x", pady=(0, 14))
+
+        box_botoes_tema = tk.Frame(card_tema, bg=TEMA_ATUAL["surface"])
+        box_botoes_tema.pack(anchor="w")
+
+        self._var_tema_opcao = tk.StringVar(value=obter_nome_tema_atual())
+
+        btn_claro = tk.Radiobutton(
+            box_botoes_tema,
+            text="Tema Claro (Padrão)",
+            value="claro",
+            variable=self._var_tema_opcao,
+            command=lambda: self._alternar_tema("claro"),
+            bg=TEMA_ATUAL["surface"],
+            fg=TEMA_ATUAL["texto"],
+            activebackground=TEMA_ATUAL["surface"],
+            activeforeground=TEMA_ATUAL["texto"],
+            font=FONTES["botao"],
+            selectcolor=TEMA_ATUAL["surface"],
+            cursor="hand2",
+            padx=10,
+            pady=6,
+        )
+        btn_claro.pack(side="left", padx=(0, 16))
+
+        btn_escuro = tk.Radiobutton(
+            box_botoes_tema,
+            text="Tema Escuro",
+            value="escuro",
+            variable=self._var_tema_opcao,
+            command=lambda: self._alternar_tema("escuro"),
+            bg=TEMA_ATUAL["surface"],
+            fg=TEMA_ATUAL["texto"],
+            activebackground=TEMA_ATUAL["surface"],
+            activeforeground=TEMA_ATUAL["texto"],
+            font=FONTES["botao"],
+            selectcolor=TEMA_ATUAL["surface"],
+            cursor="hand2",
+            padx=10,
+            pady=6,
+        )
+        btn_escuro.pack(side="left")
+
+        # Card de Manutenção (Backup e Restauração)
+        card_maint = Card(pad, padding=20)
+        card_maint.pack(fill="x", pady=(0, 16))
+
+        SectionHeader(
+            card_maint,
+            "Manutenção e Backup",
+            "Crie cópias de segurança do banco de dados local ou restaure a partir de um backup existente.",
+        ).pack(anchor="w", fill="x", pady=(0, 14))
+
+        box_botoes_maint = tk.Frame(card_maint, bg=TEMA_ATUAL["surface"])
+        box_botoes_maint.pack(anchor="w")
+
+        action_button(
+            box_botoes_maint,
+            text="Criar backup",
+            command=self._criar_backup,
+            bg=TEMA_ATUAL["surface_hover"],
+            fg=TEMA_ATUAL["texto"],
+        ).pack(side="left", padx=(0, 10))
+
+        action_button(
+            box_botoes_maint,
+            text="Restaurar backup",
+            command=self._restaurar_backup,
+            bg=TEMA_ATUAL["perigo_suave"],
+            fg=TEMA_ATUAL["perigo"],
+        ).pack(side="left")
+
+    def _alternar_tema(self, nome_tema: str):
+        """Alterna dinamicamente entre tema claro e escuro."""
+        definir_tema_atual(nome_tema)
+        configure_styles(self, nome_tema)
+        self._aplicar_tema_na_casca(nome_tema)
+
+    def _aplicar_tema_na_casca(self, nome_tema: str):
+        """Aplica as cores do tema ativo nos elementos da casca principal."""
+        bg = TEMA_ATUAL["fundo"]
+        bg_surface = TEMA_ATUAL["surface"]
+        fg_texto = TEMA_ATUAL["texto"]
+        fg_muted = TEMA_ATUAL["texto_suave"]
+
+        self.configure(bg=bg)
+        if hasattr(self, "_content_wrap"):
+            self._content_wrap.configure(bg=bg)
+        for aba in (
+            getattr(self, "_aba_venda", None),
+            getattr(self, "_aba_vendas_correcoes", None),
+            getattr(self, "_aba_estoque", None),
+            getattr(self, "_aba_importacao", None),
+            getattr(self, "_aba_relatorios", None),
+            getattr(self, "_aba_configuracoes", None),
+        ):
+            if aba:
+                aba.configure(bg=bg)
+
+        if hasattr(self, "_body"):
+            self._body.configure(bg=bg)
+        if hasattr(self, "_left_panel"):
+            self._left_panel.configure(bg=bg_surface)
+        if hasattr(self, "_right_panel"):
+            self._right_panel.configure(bg=bg)
 
     def _criar_linha_info(self, parent, label, attr_name):
         """Adiciona uma linha simples de label/valor em cards de resumo."""
