@@ -1750,6 +1750,7 @@ def totais_periodo(periodo_id: int) -> dict:
                    COALESCE(SUM(subtotal), 0) AS total
             FROM vendas
             WHERE periodo_id = ?
+              AND status <> 'cancelled'
             """,
             (periodo_id,),
         ).fetchone()
@@ -1769,6 +1770,7 @@ def resumo_do_periodo(periodo_id: int) -> dict:
                    SUM(subtotal) AS total
             FROM vendas
             WHERE periodo_id = ?
+              AND status <> 'cancelled'
             GROUP BY pagamento
             """,
             (periodo_id,),
