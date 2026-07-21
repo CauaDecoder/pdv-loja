@@ -102,7 +102,8 @@ def inicializar():
                 valor_recebido REAL,
                 troco       REAL,
                 responsavel TEXT    NOT NULL DEFAULT '',
-                status      TEXT    NOT NULL DEFAULT 'valid',
+                status      TEXT    NOT NULL DEFAULT 'valid'
+                    CHECK (status IN ('valid', 'corrected', 'cancelled')),
                 FOREIGN KEY (produto_id) REFERENCES produtos(id)
             );
 
@@ -159,7 +160,15 @@ def _garantir_colunas_vendas(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE vendas ADD COLUMN status TEXT NOT NULL DEFAULT 'valid'")
     conn.execute("UPDATE vendas SET responsavel = '' WHERE responsavel IS NULL")
     conn.execute("UPDATE vendas SET pagamento_detalhe = '' WHERE pagamento_detalhe IS NULL")
-    conn.execute("UPDATE vendas SET status = 'valid' WHERE status IS NULL OR TRIM(status) = ''")
+    conn.execute(
+        """
+        UPDATE vendas
+        SET status = 'valid'
+        WHERE status IS NULL
+           OR TRIM(status) = ''
+           OR status NOT IN ('valid', 'corrected', 'cancelled')
+        """
+    )
 
 
 def _garantir_colunas_produtos(conn: sqlite3.Connection):
@@ -237,7 +246,7 @@ def _criar_tabelas_estoque(conn: sqlite3.Connection):
 
 
 def _criar_tabelas_correcoes(conn: sqlite3.Connection):
-    conn.executescript(
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS vendas_correcoes (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -249,7 +258,12 @@ def _criar_tabelas_correcoes(conn: sqlite3.Connection):
             antes           TEXT    NOT NULL DEFAULT '',
             depois          TEXT    NOT NULL DEFAULT '',
             observacao      TEXT    NOT NULL DEFAULT ''
-        );
+        )
+        """
+    )
+    _garantir_colunas_correcoes(conn)
+    conn.executescript(
+        """
 
         CREATE INDEX IF NOT EXISTS idx_vendas_correcoes_venda
             ON vendas_correcoes(periodo_id, num_venda);
@@ -257,6 +271,29 @@ def _criar_tabelas_correcoes(conn: sqlite3.Connection):
             ON vendas_correcoes(criado_em);
         """
     )
+
+
+def _garantir_colunas_correcoes(conn: sqlite3.Connection):
+    """Migra tabelas de auditoria parciais sem descartar historico existente."""
+    colunas = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(vendas_correcoes)").fetchall()
+    }
+    novas_colunas = {
+        "periodo_id": "INTEGER",
+        "num_venda": "INTEGER NOT NULL DEFAULT 0",
+        "acao": "TEXT NOT NULL DEFAULT ''",
+        "responsavel": "TEXT NOT NULL DEFAULT ''",
+        "criado_em": "TEXT NOT NULL DEFAULT ''",
+        "antes": "TEXT NOT NULL DEFAULT ''",
+        "depois": "TEXT NOT NULL DEFAULT ''",
+        "observacao": "TEXT NOT NULL DEFAULT ''",
+    }
+    for nome, definicao in novas_colunas.items():
+        if nome not in colunas:
+            conn.execute(
+                f"ALTER TABLE vendas_correcoes ADD COLUMN {nome} {definicao}"
+            )
 
 
 def _seed_configuracoes(conn: sqlite3.Connection):

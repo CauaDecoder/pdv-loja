@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from contextlib import contextmanager
+from datetime import datetime
+from collections.abc import Iterator
 from typing import Any
 
 from database import get_conn, registrar_venda
@@ -79,6 +83,147 @@ def obter_detalhe_venda(periodo_id: int, num_venda: int) -> dict[str, Any] | Non
         ).fetchall()
 
     return _linhas_detalhe_para_contrato(linhas, historico)
+
+
+def registrar_correcao_venda(
+    periodo_id: int,
+    num_venda: int,
+    acao: str,
+    responsavel: str,
+    antes: Any,
+    depois: Any,
+    novo_status: str = "corrected",
+    observacao: str = "",
+    criado_em: str | None = None,
+) -> dict[str, Any]:
+    """Persiste status e auditoria sem executar a mutacao de negocio da correcao.
+
+    Os tickets de cancelamento, pagamento e itens usam ``_transacao_correcao``
+    para incluir suas mutacoes na mesma transacao. Esta operacao cobre somente a
+    base persistente definida para a issue de historico.
+    """
+    with _transacao_correcao(
+        periodo_id=periodo_id,
+        num_venda=num_venda,
+        acao=acao,
+        responsavel=responsavel,
+        antes=antes,
+        depois=depois,
+        novo_status=novo_status,
+        observacao=observacao,
+        criado_em=criado_em,
+    ):
+        pass
+
+    detalhe = obter_detalhe_venda(periodo_id, num_venda)
+    if detalhe is None:  # Protege o contrato caso o banco seja alterado externamente.
+        raise ValueError("Venda nao encontrada.")
+    return detalhe
+
+
+@contextmanager
+def _transacao_correcao(
+    periodo_id: int,
+    num_venda: int,
+    acao: str,
+    responsavel: str,
+    antes: Any,
+    depois: Any,
+    novo_status: str,
+    observacao: str = "",
+    criado_em: str | None = None,
+) -> Iterator[sqlite3.Connection]:
+    """Mantem mutacao futura, status e auditoria em uma unica transacao."""
+    acao, responsavel, novo_status = _validar_dados_correcao(
+        acao, responsavel, novo_status
+    )
+    criado_em = criado_em or datetime.now().isoformat(timespec="seconds")
+
+    with get_conn() as conn:
+        linhas = conn.execute(
+            """
+            SELECT DISTINCT status
+            FROM vendas
+            WHERE periodo_id = ? AND num_venda = ?
+            """,
+            (periodo_id, num_venda),
+        ).fetchall()
+        if not linhas:
+            raise ValueError("Venda nao encontrada.")
+        if len(linhas) != 1:
+            raise ValueError("Venda com status inconsistente.")
+        status_atual = _normalizar_status(linhas[0]["status"])
+        if status_atual == "cancelled":
+            raise ValueError("Venda cancelada nao pode receber nova correcao.")
+
+        yield conn
+
+        conn.execute(
+            """
+            UPDATE vendas
+            SET status = ?
+            WHERE periodo_id = ? AND num_venda = ?
+            """,
+            (novo_status, periodo_id, num_venda),
+        )
+        conn.execute(
+            """
+            INSERT INTO vendas_correcoes
+            (periodo_id, num_venda, acao, responsavel, criado_em,
+             antes, depois, observacao)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                periodo_id,
+                num_venda,
+                acao,
+                responsavel,
+                criado_em,
+                _serializar_auditoria(antes),
+                _serializar_auditoria(depois),
+                observacao.strip(),
+            ),
+        )
+
+
+def _validar_dados_correcao(
+    acao: str,
+    responsavel: str,
+    novo_status: str,
+) -> tuple[str, str, str]:
+    acao = (acao or "").strip()
+    responsavel = (responsavel or "").strip()
+    novo_status = (novo_status or "").strip()
+    if acao not in ACOES_CORRECAO:
+        raise ValueError("Acao de correcao invalida.")
+    if not responsavel:
+        raise ValueError("Responsavel pela correcao e obrigatorio.")
+    if novo_status not in {"corrected", "cancelled"}:
+        raise ValueError("Status de correcao invalido.")
+    if (acao == "cancel_sale") != (novo_status == "cancelled"):
+        raise ValueError("Acao e status da correcao sao incompativeis.")
+    return acao, responsavel, novo_status
+
+
+def _serializar_auditoria(valor: Any) -> str:
+    if isinstance(valor, str):
+        return valor
+    return json.dumps(
+        valor,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _desserializar_auditoria(valor: str | None) -> Any:
+    texto = valor or ""
+    if not texto.startswith(("{", "[")):
+        return texto
+    try:
+        return json.loads(texto)
+    except json.JSONDecodeError:
+        return texto
 
 
 def _montar_filtros(filtros: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
@@ -214,8 +359,8 @@ def _correcao_para_contrato(linha: sqlite3.Row) -> dict[str, Any]:
         "action": linha["acao"],
         "responsible": linha["responsavel"] or "",
         "created_at": linha["criado_em"],
-        "before": linha["antes"] or "",
-        "after": linha["depois"] or "",
+        "before": _desserializar_auditoria(linha["antes"]),
+        "after": _desserializar_auditoria(linha["depois"]),
         "note": linha["observacao"] or "",
     }
 
@@ -251,5 +396,6 @@ __all__ = [
     "STATUS_VALIDOS",
     "listar_vendas_correcoes",
     "obter_detalhe_venda",
+    "registrar_correcao_venda",
     "registrar_venda",
 ]
