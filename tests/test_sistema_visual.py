@@ -73,6 +73,25 @@ class SistemaVisualTest(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_painel_estoque_instanciacao(self):
+        """Testa se o PainelEstoque instacia e atualiza sem erros no Tkinter."""
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            components.configure_styles(root)
+            from estoque.painel import PainelEstoque
+            painel = PainelEstoque(root)
+            self.assertIsInstance(painel, PainelEstoque)
+            painel.atualizar()
+            painel._limpar_filtros()
+        finally:
+            root.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()
