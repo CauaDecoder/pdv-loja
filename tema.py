@@ -178,7 +178,7 @@ INPUT_STYLES = {"bg": TEMA_CLARO["surface_3"], "fg": TEMA_CLARO["text"], "border
 TABLE_STYLES = {"header_bg": TEMA_CLARO["surface_2"], "header_fg": TEMA_CLARO["text"], "row_height": 34}
 
 NOME_TEMA_ATUAL = "claro"
-TEMA_ATUAL = TEMA_CLARO
+TEMA_ATUAL = dict(TEMA_CLARO)
 _THEME_LISTENERS = []
 
 
@@ -205,12 +205,14 @@ def remover_listener_tema(listener):
 
 
 def definir_tema_atual(nome: str) -> dict[str, str]:
-    global NOME_TEMA_ATUAL, TEMA_ATUAL, VERDE_ESC, VERDE_MED, VERDE_CLAR
+    global NOME_TEMA_ATUAL, VERDE_ESC, VERDE_MED, VERDE_CLAR
     global FUNDO, FUNDO2, BRANCO, TEXTO, MUTED, BORDA, VERMELHO, AZUL, AMARELO
     global STATUS_BG, PGTO_BG, PGTO_FG, COLORS, BORDER_COLOR, BORDER_LIGHT
 
     NOME_TEMA_ATUAL = "escuro" if nome == "escuro" else "claro"
-    TEMA_ATUAL = TEMA_ESCURO if NOME_TEMA_ATUAL == "escuro" else TEMA_CLARO
+    novo_tema = TEMA_ESCURO if NOME_TEMA_ATUAL == "escuro" else TEMA_CLARO
+    TEMA_ATUAL.clear()
+    TEMA_ATUAL.update(novo_tema)
     COLORS = TEMA_ATUAL
 
     VERDE_ESC = TEMA_ATUAL["primary"]
