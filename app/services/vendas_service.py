@@ -31,7 +31,7 @@ def cancelar_venda(
     """Executa Cancelar venda e devolve ao estoque os itens vinculados."""
     detalhe_atual = obter_detalhe_venda(periodo_id, num_venda)
     if detalhe_atual is None:
-        raise ValueError("Venda nao encontrada.")
+        raise ValueError("Venda no caixa nao encontrada.")
 
     devolucoes: list[dict[str, int]] = []
     quantidades_por_produto: dict[int, int] = {}
