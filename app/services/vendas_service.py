@@ -18,6 +18,92 @@ ACOES_CORRECAO = [
     "remove_item",
     "cancel_sale",
 ]
+FORMAS_PAGAMENTO = {
+    "Debito",
+    "Credito",
+    "Pix",
+    "Dinheiro",
+    "Mais de uma forma",
+}
+
+
+def alterar_pagamento_venda(
+    periodo_id: int,
+    num_venda: int,
+    pagamento: str,
+    *,
+    responsavel: str,
+    pagamento_detalhe: str = "",
+    valor_recebido: float | None = None,
+    troco: float | None = None,
+    observacao: str = "",
+) -> dict[str, Any]:
+    """Corrige o pagamento de uma venda finalizada e preserva a auditoria."""
+    pagamento = (pagamento or "").strip()
+    pagamento_detalhe = (pagamento_detalhe or "").strip()
+
+    if pagamento not in FORMAS_PAGAMENTO:
+        raise ValueError("Forma de pagamento invalida.")
+    valor_recebido = _normalizar_valor_pagamento(valor_recebido, "Valor recebido")
+    troco = _normalizar_valor_pagamento(troco, "Troco")
+
+    with get_conn() as conn:
+        linhas = conn.execute(
+            """
+            SELECT *
+            FROM vendas
+            WHERE periodo_id = ? AND num_venda = ?
+            ORDER BY id
+            """,
+            (periodo_id, num_venda),
+        ).fetchall()
+        if not linhas:
+            raise ValueError("Venda nao encontrada.")
+
+        antes = _pagamento_para_contrato(linhas[0])
+
+    depois = {
+        "method": pagamento,
+        "detail": pagamento_detalhe,
+        "received": valor_recebido,
+        "change": troco,
+    }
+    if antes == depois:
+        raise ValueError("O novo pagamento deve ser diferente do atual.")
+
+    with _transacao_correcao(
+        periodo_id=periodo_id,
+        num_venda=num_venda,
+        acao="alter_payment",
+        responsavel=responsavel,
+        antes=antes,
+        depois=depois,
+        novo_status="corrected",
+        observacao=observacao,
+    ) as conn:
+        conn.execute(
+            """
+            UPDATE vendas
+            SET pagamento = ?,
+                pagamento_detalhe = ?,
+                valor_recebido = ?,
+                troco = ?
+            WHERE periodo_id = ? AND num_venda = ?
+            """,
+            (
+                pagamento,
+                pagamento_detalhe,
+                valor_recebido,
+                troco,
+                periodo_id,
+                num_venda,
+            ),
+        )
+
+    detalhe = obter_detalhe_venda(periodo_id, num_venda)
+    if detalhe is None:  # Protecao contra alteracao externa entre as transacoes.
+        raise RuntimeError("Venda corrigida nao encontrada para consulta.")
+    return detalhe
 
 
 def cancelar_venda(
@@ -414,6 +500,18 @@ def _pagamento_para_contrato(linha: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _normalizar_valor_pagamento(valor: float | None, campo: str) -> float | None:
+    if valor is None:
+        return None
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{campo} invalido.") from exc
+    if numero < 0:
+        raise ValueError(f"{campo} nao pode ser negativo.")
+    return numero
+
+
 def _item_para_contrato(linha: sqlite3.Row) -> dict[str, Any]:
     return {
         "line_id": int(linha["id"]),
@@ -466,8 +564,10 @@ def _resumo_itens(itens: int, unidades: int) -> str:
 
 __all__ = [
     "ACOES_CORRECAO",
+    "FORMAS_PAGAMENTO",
     "STATUS_VALIDOS",
     "cancelar_venda",
+    "alterar_pagamento_venda",
     "listar_vendas_correcoes",
     "obter_detalhe_venda",
     "registrar_correcao_venda",

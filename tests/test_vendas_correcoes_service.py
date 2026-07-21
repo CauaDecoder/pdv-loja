@@ -681,3 +681,161 @@ def test_cancelar_venda_legada_sem_produto_vinculado_preserva_compatibilidade():
         }
     finally:
         _limpar_banco_temporario(temp, original)
+
+
+def test_alterar_pagamento_preserva_responsavel_original_e_registra_auditoria():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_id = _criar_produto("A", "Produto A", 12)
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_id,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 2,
+                    "preco_unit": 12,
+                }
+            ],
+            "Pix",
+            responsavel="Maria",
+            data="01/01/2026",
+        )
+
+        detalhe = vendas_service.alterar_pagamento_venda(
+            periodo_id,
+            1,
+            "Credito",
+            pagamento_detalhe="Visa | 2x",
+            responsavel="Ana",
+            observacao="Forma registrada incorretamente",
+        )
+
+        assert detalhe["status"] == "corrected"
+        assert detalhe["responsible"] == "Maria"
+        assert detalhe["payment"] == {
+            "method": "Credito",
+            "detail": "Visa | 2x",
+            "received": None,
+            "change": None,
+        }
+        assert len(detalhe["correction_history"]) == 1
+        correcao = detalhe["correction_history"][0]
+        assert correcao["action"] == "alter_payment"
+        assert correcao["responsible"] == "Ana"
+        assert correcao["created_at"]
+        assert correcao["before"] == {
+            "method": "Pix",
+            "detail": "",
+            "received": None,
+            "change": None,
+        }
+        assert correcao["after"] == detalhe["payment"]
+        assert correcao["note"] == "Forma registrada incorretamente"
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
+def test_alterar_pagamento_atualiza_todas_as_linhas_e_totais_por_forma():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_a = _criar_produto("A", "Produto A", 12)
+        produto_b = _criar_produto("B", "Produto B", 5)
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_a,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 2,
+                    "preco_unit": 12,
+                },
+                {
+                    "produto_id": produto_b,
+                    "codigo": "B",
+                    "nome": "Produto B",
+                    "quantidade": 1,
+                    "preco_unit": 5,
+                },
+            ],
+            "Pix",
+            responsavel="Maria",
+            data="01/01/2026",
+        )
+
+        vendas_service.alterar_pagamento_venda(
+            periodo_id,
+            1,
+            "Dinheiro",
+            pagamento_detalhe="Recebido R$ 30,00; troco R$ 1,00",
+            valor_recebido=30,
+            troco=1,
+            responsavel="Ana",
+        )
+
+        linhas = database.vendas_do_periodo(periodo_id)
+        assert {linha["pagamento"] for linha in linhas} == {"Dinheiro"}
+        assert {linha["status"] for linha in linhas} == {"corrected"}
+        assert database.resumo_do_periodo(periodo_id) == {
+            "Dinheiro": {
+                "pagamento": "Dinheiro",
+                "transacoes": 1,
+                "total": 29.0,
+            }
+        }
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
+def test_alterar_pagamento_rejeita_venda_inexistente_ou_cancelada():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_id = _criar_produto("A", "Produto A", 12)
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_id,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 1,
+                    "preco_unit": 12,
+                }
+            ],
+            "Pix",
+            responsavel="Maria",
+            data="01/01/2026",
+        )
+        with database.get_conn() as conn:
+            conn.execute(
+                "UPDATE vendas SET status = 'cancelled' WHERE periodo_id = ? AND num_venda = 1",
+                (periodo_id,),
+            )
+
+        try:
+            vendas_service.alterar_pagamento_venda(
+                periodo_id, 99, "Credito", responsavel="Ana"
+            )
+            assert False, "Venda inexistente deveria ser rejeitada"
+        except ValueError as exc:
+            assert str(exc) == "Venda nao encontrada."
+
+        try:
+            vendas_service.alterar_pagamento_venda(
+                periodo_id, 1, "Credito", responsavel="Ana"
+            )
+            assert False, "Venda cancelada deveria ser rejeitada"
+        except ValueError as exc:
+            assert str(exc) == "Venda cancelada nao pode receber nova correcao."
+
+        assert vendas_service.obter_detalhe_venda(periodo_id, 1)["correction_history"] == []
+    finally:
+        _limpar_banco_temporario(temp, original)
