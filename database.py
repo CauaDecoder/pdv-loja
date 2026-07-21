@@ -102,6 +102,7 @@ def inicializar():
                 valor_recebido REAL,
                 troco       REAL,
                 responsavel TEXT    NOT NULL DEFAULT '',
+                status      TEXT    NOT NULL DEFAULT 'valid',
                 FOREIGN KEY (produto_id) REFERENCES produtos(id)
             );
 
@@ -130,6 +131,7 @@ def inicializar():
         _garantir_colunas_vendas(conn)
         _garantir_colunas_produtos(conn)
         _criar_tabelas_estoque(conn)
+        _criar_tabelas_correcoes(conn)
         _seed_configuracoes(conn)
         conn.execute(
             """
@@ -153,8 +155,11 @@ def _garantir_colunas_vendas(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE vendas ADD COLUMN valor_recebido REAL")
     if "troco" not in colunas:
         conn.execute("ALTER TABLE vendas ADD COLUMN troco REAL")
+    if "status" not in colunas:
+        conn.execute("ALTER TABLE vendas ADD COLUMN status TEXT NOT NULL DEFAULT 'valid'")
     conn.execute("UPDATE vendas SET responsavel = '' WHERE responsavel IS NULL")
     conn.execute("UPDATE vendas SET pagamento_detalhe = '' WHERE pagamento_detalhe IS NULL")
+    conn.execute("UPDATE vendas SET status = 'valid' WHERE status IS NULL OR TRIM(status) = ''")
 
 
 def _garantir_colunas_produtos(conn: sqlite3.Connection):
@@ -227,6 +232,29 @@ def _criar_tabelas_estoque(conn: sqlite3.Connection):
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mov_venda_ref_produto
             ON movimentacoes_estoque(referencia, produto_id, tipo)
             WHERE tipo = 'VENDA';
+        """
+    )
+
+
+def _criar_tabelas_correcoes(conn: sqlite3.Connection):
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS vendas_correcoes (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            periodo_id      INTEGER,
+            num_venda       INTEGER NOT NULL,
+            acao            TEXT    NOT NULL,
+            responsavel     TEXT    NOT NULL DEFAULT '',
+            criado_em       TEXT    NOT NULL,
+            antes           TEXT    NOT NULL DEFAULT '',
+            depois          TEXT    NOT NULL DEFAULT '',
+            observacao      TEXT    NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_vendas_correcoes_venda
+            ON vendas_correcoes(periodo_id, num_venda);
+        CREATE INDEX IF NOT EXISTS idx_vendas_correcoes_criado
+            ON vendas_correcoes(criado_em);
         """
     )
 
