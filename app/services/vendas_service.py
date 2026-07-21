@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from database import _registrar_movimentacao_estoque, get_conn, registrar_venda
+from database import get_conn, registrar_venda
 
 STATUS_VALIDOS = {"valid", "corrected", "cancelled"}
 ACOES_CORRECAO = [
@@ -18,68 +18,91 @@ ACOES_CORRECAO = [
     "remove_item",
     "cancel_sale",
 ]
+FORMAS_PAGAMENTO = {
+    "Debito",
+    "Credito",
+    "Pix",
+    "Dinheiro",
+    "Mais de uma forma",
+}
 
 
-def cancelar_venda(
+def alterar_pagamento_venda(
     periodo_id: int,
     num_venda: int,
+    pagamento: str,
     *,
     responsavel: str,
+    pagamento_detalhe: str = "",
+    valor_recebido: float | None = None,
+    troco: float | None = None,
     observacao: str = "",
-    criado_em: str | None = None,
 ) -> dict[str, Any]:
-    """Cancela uma venda finalizada, devolvendo seus itens ao estoque."""
-    detalhe_atual = obter_detalhe_venda(periodo_id, num_venda)
-    if detalhe_atual is None:
-        raise ValueError("Venda nao encontrada.")
+    """Corrige o pagamento de uma venda finalizada e preserva a auditoria."""
+    pagamento = (pagamento or "").strip()
+    pagamento_detalhe = (pagamento_detalhe or "").strip()
 
-    devolucoes: list[dict[str, int]] = []
-    quantidades_por_produto: dict[int, int] = {}
-    for item in detalhe_atual["items"]:
-        produto_id = item["product_id"]
-        if produto_id is None:
-            raise ValueError("Venda possui item sem produto para devolver ao estoque.")
-        quantidades_por_produto[produto_id] = (
-            quantidades_por_produto.get(produto_id, 0) + item["quantity"]
-        )
-    for produto_id, quantidade in quantidades_por_produto.items():
-        devolucoes.append({"product_id": produto_id, "quantity": quantidade})
+    if pagamento not in FORMAS_PAGAMENTO:
+        raise ValueError("Forma de pagamento invalida.")
+    valor_recebido = _normalizar_valor_pagamento(valor_recebido, "Valor recebido")
+    troco = _normalizar_valor_pagamento(troco, "Troco")
 
-    antes = {"status": detalhe_atual["status"]}
-    depois = {"status": "cancelled", "stock_returned": devolucoes}
-    data = detalhe_atual["timestamps"]["date"]
-    hora = detalhe_atual["timestamps"]["time"]
+    with get_conn() as conn:
+        linhas = conn.execute(
+            """
+            SELECT *
+            FROM vendas
+            WHERE periodo_id = ? AND num_venda = ?
+            ORDER BY id
+            """,
+            (periodo_id, num_venda),
+        ).fetchall()
+        if not linhas:
+            raise ValueError("Venda nao encontrada.")
+
+        antes = _pagamento_para_contrato(linhas[0])
+
+    depois = {
+        "method": pagamento,
+        "detail": pagamento_detalhe,
+        "received": valor_recebido,
+        "change": troco,
+    }
+    if antes == depois:
+        raise ValueError("O novo pagamento deve ser diferente do atual.")
 
     with _transacao_correcao(
         periodo_id=periodo_id,
         num_venda=num_venda,
-        acao="cancel_sale",
+        acao="alter_payment",
         responsavel=responsavel,
         antes=antes,
         depois=depois,
-        novo_status="cancelled",
+        novo_status="corrected",
         observacao=observacao,
-        criado_em=criado_em,
     ) as conn:
-        for devolucao in devolucoes:
-            produto_id = devolucao["product_id"]
-            _registrar_movimentacao_estoque(
-                conn,
-                produto_id,
-                "CANCELAMENTO",
-                devolucao["quantity"],
-                data,
-                hora,
-                referencia=f"CANCELAMENTO:{periodo_id}:{num_venda}:{produto_id}",
-                observacao=f"Cancelamento da venda #{num_venda:03d}",
-                responsavel=responsavel,
-                origem="CORRECAO_POS_VENDA",
-                alterar_saldo=True,
-            )
+        conn.execute(
+            """
+            UPDATE vendas
+            SET pagamento = ?,
+                pagamento_detalhe = ?,
+                valor_recebido = ?,
+                troco = ?
+            WHERE periodo_id = ? AND num_venda = ?
+            """,
+            (
+                pagamento,
+                pagamento_detalhe,
+                valor_recebido,
+                troco,
+                periodo_id,
+                num_venda,
+            ),
+        )
 
     detalhe = obter_detalhe_venda(periodo_id, num_venda)
-    if detalhe is None:
-        raise RuntimeError("Venda cancelada nao encontrada para consulta.")
+    if detalhe is None:  # Protecao contra alteracao externa entre as transacoes.
+        raise RuntimeError("Venda corrigida nao encontrada para consulta.")
     return detalhe
 
 
@@ -165,15 +188,6 @@ def registrar_correcao_venda(
     para incluir suas mutacoes na mesma transacao. Esta operacao cobre somente a
     base persistente definida para a issue de historico.
     """
-    if (acao or "").strip() == "cancel_sale":
-        return cancelar_venda(
-            periodo_id,
-            num_venda,
-            responsavel=responsavel,
-            observacao=observacao,
-            criado_em=criado_em,
-        )
-
     with _transacao_correcao(
         periodo_id=periodo_id,
         num_venda=num_venda,
@@ -413,6 +427,18 @@ def _pagamento_para_contrato(linha: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _normalizar_valor_pagamento(valor: float | None, campo: str) -> float | None:
+    if valor is None:
+        return None
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{campo} invalido.") from exc
+    if numero < 0:
+        raise ValueError(f"{campo} nao pode ser negativo.")
+    return numero
+
+
 def _item_para_contrato(linha: sqlite3.Row) -> dict[str, Any]:
     return {
         "line_id": int(linha["id"]),
@@ -465,8 +491,9 @@ def _resumo_itens(itens: int, unidades: int) -> str:
 
 __all__ = [
     "ACOES_CORRECAO",
+    "FORMAS_PAGAMENTO",
     "STATUS_VALIDOS",
-    "cancelar_venda",
+    "alterar_pagamento_venda",
     "listar_vendas_correcoes",
     "obter_detalhe_venda",
     "registrar_correcao_venda",

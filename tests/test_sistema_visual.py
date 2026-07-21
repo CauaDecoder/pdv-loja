@@ -2,8 +2,11 @@
 
 import unittest
 import tkinter as tk
+import tempfile
+from pathlib import Path
 from tkinter import ttk
 
+import database
 import tema
 from app.ui import components
 
@@ -82,15 +85,21 @@ class SistemaVisualTest(unittest.TestCase):
             self.skipTest("Ambiente GUI Tkinter nao disponivel")
             return
 
-        try:
-            components.configure_styles(root)
-            from estoque.painel import PainelEstoque
-            painel = PainelEstoque(root)
-            self.assertIsInstance(painel, PainelEstoque)
-            painel.atualizar()
-            painel._limpar_filtros()
-        finally:
-            root.destroy()
+        db_path_original = database.DB_PATH
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database.DB_PATH = Path(temp_dir) / "loja_teste.db"
+            try:
+                database.inicializar()
+                components.configure_styles(root)
+                from estoque.painel import PainelEstoque
+
+                painel = PainelEstoque(root)
+                self.assertIsInstance(painel, PainelEstoque)
+                painel.atualizar()
+                painel._limpar_filtros()
+            finally:
+                database.DB_PATH = db_path_original
+                root.destroy()
 
 
 if __name__ == "__main__":
