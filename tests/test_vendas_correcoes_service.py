@@ -643,3 +643,41 @@ def test_falha_na_auditoria_desfaz_cancelamento_e_devolucao_de_estoque():
         assert cancelamentos == 0
     finally:
         _limpar_banco_temporario(temp, original)
+
+
+def test_cancelar_venda_legada_sem_produto_vinculado_preserva_compatibilidade():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "codigo": "LEGADO",
+                    "nome": "Produto legado",
+                    "quantidade": 1,
+                    "preco_unit": 12,
+                }
+            ],
+            "Pix",
+            data="01/01/2026",
+        )
+
+        detalhe = vendas_service.cancelar_venda(
+            periodo_id, 1, responsavel="Ana"
+        )
+
+        assert detalhe["status"] == "cancelled"
+        assert detalhe["items"][0]["product_id"] is None
+        assert detalhe["correction_history"][-1]["after"] == {
+            "status": "cancelled",
+            "stock_returned": [],
+        }
+        assert database.listar_movimentacoes_estoque(tipo="CANCELAMENTO") == []
+        assert database.totais_periodo(periodo_id) == {
+            "transacoes": 0,
+            "total": 0.0,
+        }
+    finally:
+        _limpar_banco_temporario(temp, original)

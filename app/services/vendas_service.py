@@ -28,7 +28,7 @@ def cancelar_venda(
     observacao: str = "",
     criado_em: str | None = None,
 ) -> dict[str, Any]:
-    """Cancela uma venda finalizada, devolvendo seus itens ao estoque."""
+    """Executa Cancelar venda e devolve ao estoque os itens vinculados."""
     detalhe_atual = obter_detalhe_venda(periodo_id, num_venda)
     if detalhe_atual is None:
         raise ValueError("Venda nao encontrada.")
@@ -38,7 +38,7 @@ def cancelar_venda(
     for item in detalhe_atual["items"]:
         produto_id = item["product_id"]
         if produto_id is None:
-            raise ValueError("Venda possui item sem produto para devolver ao estoque.")
+            continue
         quantidades_por_produto[produto_id] = (
             quantidades_por_produto.get(produto_id, 0) + item["quantity"]
         )
@@ -47,8 +47,9 @@ def cancelar_venda(
 
     antes = {"status": detalhe_atual["status"]}
     depois = {"status": "cancelled", "stock_returned": devolucoes}
-    data = detalhe_atual["timestamps"]["date"]
-    hora = detalhe_atual["timestamps"]["time"]
+    momento_cancelamento = datetime.now()
+    data = momento_cancelamento.strftime("%d/%m/%Y")
+    hora = momento_cancelamento.strftime("%H:%M")
 
     with _transacao_correcao(
         periodo_id=periodo_id,
