@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
-from collections.abc import Iterator
 from typing import Any
 
-from database import get_conn, registrar_venda
+from database import _registrar_movimentacao_estoque, get_conn, registrar_venda
 
 STATUS_VALIDOS = {"valid", "corrected", "cancelled"}
 ACOES_CORRECAO = [
@@ -18,6 +18,69 @@ ACOES_CORRECAO = [
     "remove_item",
     "cancel_sale",
 ]
+
+
+def cancelar_venda(
+    periodo_id: int,
+    num_venda: int,
+    *,
+    responsavel: str,
+    observacao: str = "",
+    criado_em: str | None = None,
+) -> dict[str, Any]:
+    """Cancela uma venda finalizada, devolvendo seus itens ao estoque."""
+    detalhe_atual = obter_detalhe_venda(periodo_id, num_venda)
+    if detalhe_atual is None:
+        raise ValueError("Venda nao encontrada.")
+
+    devolucoes: list[dict[str, int]] = []
+    quantidades_por_produto: dict[int, int] = {}
+    for item in detalhe_atual["items"]:
+        produto_id = item["product_id"]
+        if produto_id is None:
+            raise ValueError("Venda possui item sem produto para devolver ao estoque.")
+        quantidades_por_produto[produto_id] = (
+            quantidades_por_produto.get(produto_id, 0) + item["quantity"]
+        )
+    for produto_id, quantidade in quantidades_por_produto.items():
+        devolucoes.append({"product_id": produto_id, "quantity": quantidade})
+
+    antes = {"status": detalhe_atual["status"]}
+    depois = {"status": "cancelled", "stock_returned": devolucoes}
+    data = detalhe_atual["timestamps"]["date"]
+    hora = detalhe_atual["timestamps"]["time"]
+
+    with _transacao_correcao(
+        periodo_id=periodo_id,
+        num_venda=num_venda,
+        acao="cancel_sale",
+        responsavel=responsavel,
+        antes=antes,
+        depois=depois,
+        novo_status="cancelled",
+        observacao=observacao,
+        criado_em=criado_em,
+    ) as conn:
+        for devolucao in devolucoes:
+            produto_id = devolucao["product_id"]
+            _registrar_movimentacao_estoque(
+                conn,
+                produto_id,
+                "CANCELAMENTO",
+                devolucao["quantity"],
+                data,
+                hora,
+                referencia=f"CANCELAMENTO:{periodo_id}:{num_venda}:{produto_id}",
+                observacao=f"Cancelamento da venda #{num_venda:03d}",
+                responsavel=responsavel,
+                origem="CORRECAO_POS_VENDA",
+                alterar_saldo=True,
+            )
+
+    detalhe = obter_detalhe_venda(periodo_id, num_venda)
+    if detalhe is None:
+        raise RuntimeError("Venda cancelada nao encontrada para consulta.")
+    return detalhe
 
 
 def listar_vendas_correcoes(
@@ -102,6 +165,15 @@ def registrar_correcao_venda(
     para incluir suas mutacoes na mesma transacao. Esta operacao cobre somente a
     base persistente definida para a issue de historico.
     """
+    if (acao or "").strip() == "cancel_sale":
+        return cancelar_venda(
+            periodo_id,
+            num_venda,
+            responsavel=responsavel,
+            observacao=observacao,
+            criado_em=criado_em,
+        )
+
     with _transacao_correcao(
         periodo_id=periodo_id,
         num_venda=num_venda,
@@ -394,6 +466,7 @@ def _resumo_itens(itens: int, unidades: int) -> str:
 __all__ = [
     "ACOES_CORRECAO",
     "STATUS_VALIDOS",
+    "cancelar_venda",
     "listar_vendas_correcoes",
     "obter_detalhe_venda",
     "registrar_correcao_venda",
