@@ -44,7 +44,10 @@ from tema import (
     VERDE_ESC,
     VERDE_MED,
     VERMELHO,
+    definir_tema_atual,
     moeda,
+    obter_nome_tema_atual,
+    registrar_listener_tema,
 )
 
 # Listas de apoio usadas em dialogs e validacoes.
@@ -56,6 +59,8 @@ PLACEHOLDER_BUSCA = "Escaneie o código ou busque pelo nome"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RELATORIOS_DIR = PROJECT_ROOT / "relatorios"
 BACKUPS_DIR = PROJECT_ROOT / "backups"
+
+
 class MovimentacoesEstoque(tk.Frame):
     """Historico geral das movimentacoes de estoque."""
 
@@ -138,7 +143,7 @@ class MovimentacoesEstoque(tk.Frame):
 
 
 class ConfiguracoesEstoque(tk.Frame):
-    """Tela simples para parametros de estoque e curva ABC."""
+    """Tela simples para parametros de estoque e configuracoes visuais."""
 
     CAMPOS = (
         ("abc_metodo", "Metodo ABC"),
@@ -152,13 +157,49 @@ class ConfiguracoesEstoque(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=FUNDO)
         self._vars: dict[str, tk.StringVar] = {}
+        self._var_tema = tk.StringVar(value=obter_nome_tema_atual())
         self._build_ui()
         self.atualizar()
 
     def _build_ui(self):
         frame = Card(self, padding=18)
         frame.pack(fill="both", expand=True, padx=18, pady=16)
-        PageHeader(frame, "Configurações de estoque", "Parâmetros de curva ABC e reposição automática").pack(fill="x")
+        PageHeader(frame, "Configurações de estoque e sistema", "Parâmetros de reposição e aparência visual").pack(fill="x")
+        
+        # Secao de Tema Visual
+        sec_tema = tk.Frame(frame, bg=BRANCO)
+        sec_tema.pack(fill="x", pady=(16, 12))
+        SectionHeader(sec_tema, "Aparência e Tema", "Escolha manual entre tema claro e tema escuro").pack(fill="x")
+
+        linha_tema = tk.Frame(sec_tema, bg=BRANCO)
+        linha_tema.pack(fill="x", pady=(8, 0))
+
+        rb_claro = tk.Radiobutton(
+            linha_tema,
+            text="Tema Claro (Padrão)",
+            value="claro",
+            variable=self._var_tema,
+            bg=BRANCO,
+            fg=TEXTO,
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2",
+            command=self._trocar_tema,
+        )
+        rb_claro.pack(side="left", padx=(0, 20))
+
+        rb_escuro = tk.Radiobutton(
+            linha_tema,
+            text="Tema Escuro",
+            value="escuro",
+            variable=self._var_tema,
+            bg=BRANCO,
+            fg=TEXTO,
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2",
+            command=self._trocar_tema,
+        )
+        rb_escuro.pack(side="left")
+
         form = tk.Frame(frame, bg=BRANCO)
         form.pack(fill="x", pady=(16, 0))
         descricoes = {
@@ -189,10 +230,14 @@ class ConfiguracoesEstoque(tk.Frame):
             self._vars[chave] = var
         tk.Button(frame, text="✓ Salvar configurações", bg=VERDE_ESC, fg=BRANCO, relief="flat", font=("Segoe UI", 10, "bold"), command=self._salvar).pack(anchor="e", pady=(6, 0))
 
+    def _trocar_tema(self):
+        definir_tema_atual(self._var_tema.get())
+
     def atualizar(self):
         config = db.configuracoes()
         for chave, var in self._vars.items():
             var.set(config.get(chave, ""))
+        self._var_tema.set(obter_nome_tema_atual())
 
     def _salvar(self):
         db.atualizar_configuracoes({chave: var.get() for chave, var in self._vars.items()})
@@ -212,6 +257,7 @@ class CaixaApp(tk.Tk):
 
         db.inicializar()
         configure_styles(self)
+        registrar_listener_tema(self._ao_alterar_tema)
 
         self._data_hoje = datetime.now().strftime("%d/%m/%Y")
         self._periodo_id = 0
@@ -241,6 +287,22 @@ class CaixaApp(tk.Tk):
         self._abrir_periodo_para_data(self._data_hoje)
         self._atualizar_relogio()
         self._atualizar_status_fluxo()
+
+    def _ao_alterar_tema(self, tema: dict[str, str], nome: str):
+        """Re-aplica configuracoes visuais quando o tema e alterado dinamicamente."""
+        try:
+            self.configure(bg=tema["bg"])
+            configure_styles(self, nome)
+            if hasattr(self, "_content_wrap"):
+                self._content_wrap.configure(bg=tema["bg"])
+            if hasattr(self, "_aba_venda"):
+                self._aba_venda.configure(bg=tema["bg"])
+            if hasattr(self, "_aba_historico"):
+                self._aba_historico.configure(bg=tema["bg"])
+            if hasattr(self, "_aba_estoque"):
+                self._aba_estoque.configure(bg=tema["bg"])
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Construcao da interface
