@@ -24,8 +24,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import database as db
-import relatorio as rel
-from app.services import backup_service, importacao_service
+from app.services import backup_service, importacao_service, relatorios_service
 from app.ui.components import (
     Card,
     DataTable,
@@ -1554,16 +1553,13 @@ class CaixaApp(tk.Tk):
     def _exportar_periodo(self, pasta_saida: str):
         """Monta os dados do periodo e delega a geracao do relatorio."""
         periodo = db.obter_periodo(self._periodo_id)
-        linhas = [dict(row) for row in db.vendas_do_periodo(self._periodo_id)]
-        if not periodo or not linhas:
+        if not periodo or not db.vendas_do_periodo(self._periodo_id):
             return None
 
-        return rel.gerar_relatorio(
-            linhas,
-            periodo["data"],
+        return relatorios_service.gerar_relatorio_periodo(
+            self._periodo_id,
             pasta_saida,
             responsavel=periodo["responsavel"] or self._responsavel_atual(),
-            periodo_seq=periodo["sequencia"],
         )
 
     def _exportar_relatorio(self):

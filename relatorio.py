@@ -89,6 +89,7 @@ def _agrupar_vendas(linhas: list[dict]) -> list[dict]:
                 "valor_recebido": linha.get("valor_recebido"),
                 "troco": linha.get("troco"),
                 "responsavel": (linha.get("responsavel") or "").strip(),
+                "status": (linha.get("status") or "valid").strip(),
                 "itens": [],
                 "total": 0.0,
             }
@@ -416,6 +417,103 @@ def _aba_resumo(
     c4.number_format = "0.0%"
 
 
+def _aba_canceladas(
+    wb: Workbook,
+    vendas: list[dict],
+    data: str,
+    periodo_seq: int | None,
+):
+    """Mantem Vendas canceladas fora do financeiro, mas visiveis para auditoria."""
+    ws = wb.create_sheet("Vendas Canceladas")
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A6"
+
+    for coluna, largura in {
+        "A": 12,
+        "B": 12,
+        "C": 38,
+        "D": 12,
+        "E": 18,
+        "F": 28,
+        "G": 24,
+    }.items():
+        ws.column_dimensions[coluna].width = largura
+
+    periodo_texto = f"Periodo {periodo_seq:02d}" if periodo_seq else "Periodo unico"
+    ws.row_dimensions[1].height = 6
+    ws.merge_cells("A2:G2")
+    titulo = ws["A2"]
+    titulo.value = "Vendas canceladas - rastreabilidade"
+    titulo.font = _font(bold=True, size=13, color=VERDE_ESC)
+    titulo.alignment = _align("left", "center")
+    ws.row_dimensions[2].height = 34
+
+    ws.merge_cells("A3:G3")
+    contexto = ws["A3"]
+    contexto.value = (
+        f"Data: {data}    |    {periodo_texto}    |    "
+        "Valores excluidos da movimentacao financeira"
+    )
+    contexto.font = _font(size=9, color=MUTED, italic=True)
+    contexto.alignment = _align("left", "center")
+
+    for coluna in range(1, 8):
+        ws.cell(row=4, column=coluna).border = Border(
+            bottom=_side(VERDE_ESC, "medium")
+        )
+
+    headers = [
+        "N. Venda",
+        "Horario",
+        "Itens",
+        "Unidades",
+        "Valor cancelado",
+        "Pagamento registrado",
+        "Responsavel",
+    ]
+    for indice, header in enumerate(headers, 1):
+        celula = ws.cell(row=5, column=indice, value=header)
+        celula.font = _font(bold=True, color=BRANCO)
+        celula.fill = _fill(VERDE_ESC)
+        celula.alignment = _align("center")
+        celula.border = _border(VERDE_ESC)
+
+    if not vendas:
+        ws.merge_cells("A6:G6")
+        vazio = ws["A6"]
+        vazio.value = "Nenhuma Venda cancelada neste periodo."
+        vazio.font = _font(color=MUTED, italic=True)
+        vazio.alignment = _align("center")
+        vazio.fill = _fill(CINZA_LIN)
+        vazio.border = _border()
+        ws.row_dimensions[6].height = 28
+        return
+
+    for indice, venda in enumerate(vendas, start=6):
+        unidades = sum(int(item["quantidade"]) for item in venda["itens"])
+        nomes = ", ".join(item["nome"] for item in venda["itens"])
+        valores = [
+            venda["num_venda"],
+            venda["hora"],
+            nomes,
+            unidades,
+            venda["total"],
+            _descricao_pagamento(venda),
+            venda["responsavel"] or "Nao informado",
+        ]
+        bg = BRANCO if indice % 2 == 0 else CINZA_LIN
+        for coluna, valor in enumerate(valores, 1):
+            celula = ws.cell(row=indice, column=coluna, value=valor)
+            celula.font = _font()
+            celula.fill = _fill(bg)
+            celula.border = _border()
+            celula.alignment = _align("left" if coluna in (3, 6, 7) else "center")
+            if coluna == 5:
+                celula.number_format = _money()
+
+        ws.row_dimensions[indice].height = 22
+
+
 def gerar_relatorio(
     linhas: list,
     data: str,
@@ -428,9 +526,19 @@ def gerar_relatorio(
     data: string "dd/mm/aaaa".
     Retorna o Path do arquivo gerado.
     """
-    vendas = _agrupar_vendas(linhas)
+    todas_as_vendas = _agrupar_vendas(linhas)
+    vendas = [
+        venda for venda in todas_as_vendas if venda["status"] != "cancelled"
+    ]
+    vendas_canceladas = [
+        venda for venda in todas_as_vendas if venda["status"] == "cancelled"
+    ]
     responsavel = responsavel.strip() or next(
-        (venda["responsavel"] for venda in vendas if venda["responsavel"]),
+        (
+            venda["responsavel"]
+            for venda in todas_as_vendas
+            if venda["responsavel"]
+        ),
         "",
     )
 
@@ -444,6 +552,7 @@ def gerar_relatorio(
         resumo["total"],
         periodo_seq,
     )
+    _aba_canceladas(wb, vendas_canceladas, data, periodo_seq)
 
     pasta = Path(pasta_saida)
     pasta.mkdir(parents=True, exist_ok=True)
