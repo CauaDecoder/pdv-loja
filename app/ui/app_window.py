@@ -39,6 +39,7 @@ from app.ui.components import (
     configure_styles,
 )
 from app.ui.importacao_dialog import confirmar_importacao
+from app.ui.importacao_view import ImportacaoGuidedView
 from estoque.dashboard import DashboardEstoque
 from estoque.painel import PainelEstoque
 from tema import (
@@ -603,40 +604,12 @@ class CaixaApp(tk.Tk):
         self._build_vendas_correcoes_tab()
 
     def _build_importacao_tab(self):
-        """Monta o frame da casca para a aba de Importação (preparatório para #13)."""
-        pad = tk.Frame(self._aba_importacao, bg=TEMA_ATUAL["fundo"], padx=18, pady=16)
-        pad.pack(fill="both", expand=True)
-
-        PageHeader(
-            pad,
-            "Importação de produtos",
-            "Fluxo guiado em etapas para importar planilhas e conferir impactos no estoque.",
-        ).pack(fill="x", pady=(0, 16))
-
-        card = Card(pad, padding=20)
-        card.pack(fill="x", pady=(0, 16))
-
-        SectionHeader(
-            card,
-            "Importação de produtos (Conta Azul)",
-            "Selecione um arquivo CSV/XLSX para atualizar o catálogo de produtos e saldos.",
-        ).pack(anchor="w", fill="x", pady=(0, 14))
-
-        tk.Label(
-            card,
-            text="O redesign completo em etapas (arquivo, modo, conferência e confirmação) será implementado na issue #13.",
-            bg=TEMA_ATUAL["surface"],
-            fg=TEMA_ATUAL["texto_suave"],
-            font=FONTES["corpo"],
-        ).pack(anchor="w", pady=(0, 16))
-
-        action_button(
-            card,
-            text="Iniciar importação de planilha",
-            command=self._importar_planilha,
-            bg=TEMA_ATUAL["primaria"],
-            fg="#FFFFFF",
-        ).pack(anchor="w")
+        """Monta o fluxo guiado em 4 etapas da aba de Importação (Issue #14)."""
+        self._importacao_view = ImportacaoGuidedView(
+            self._aba_importacao,
+            on_import_complete=self._atualizar_painel_estoque,
+        )
+        self._importacao_view.pack(fill="both", expand=True)
 
     def _build_relatorios_tab(self):
         """Monta o frame da casca para a aba de Relatórios (preparatório para #14)."""
