@@ -91,6 +91,18 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
         darkcolor=tema["border_soft"],
         foreground=tema["text"],
     )
+    style.map(
+        "TCombobox",
+        fieldbackground=[("readonly", tema["surface_3"]), ("disabled", tema["surface_2"])],
+        background=[("readonly", tema["surface_2"]), ("active", tema["surface_hover"])],
+        foreground=[("readonly", tema["text"]), ("disabled", tema["text_muted"])],
+        selectbackground=[("readonly", tema["primary_soft"])],
+        selectforeground=[("readonly", tema["text"])],
+    )
+    root.option_add("*TCombobox*Listbox.background", tema["surface_3"])
+    root.option_add("*TCombobox*Listbox.foreground", tema["text"])
+    root.option_add("*TCombobox*Listbox.selectBackground", tema["primary_soft"])
+    root.option_add("*TCombobox*Listbox.selectForeground", tema["text"])
 
     style.configure(
         "TScrollbar",

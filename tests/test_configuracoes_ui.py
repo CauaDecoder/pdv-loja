@@ -118,6 +118,33 @@ class ConfiguracoesUITest(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_botoes_de_selecao_permanecem_legiveis_no_tema_escuro(self):
+        """Radio e check buttons não podem conservar seleção branca no tema escuro."""
+        try:
+            root = CaixaApp()
+            root.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            root._alternar_tema("escuro")
+            pendentes = [root]
+            seletores = []
+            while pendentes:
+                widget = pendentes.pop()
+                pendentes.extend(widget.winfo_children())
+                if isinstance(widget, (tk.Radiobutton, tk.Checkbutton)):
+                    seletores.append(widget)
+
+            self.assertTrue(seletores)
+            for seletor in seletores:
+                self.assertNotEqual(seletor.cget("selectcolor").lower(), "#ffffff")
+                self.assertEqual(seletor.cget("foreground"), tema.TEMA_ESCURO["text"])
+        finally:
+            root.destroy()
+            tema.definir_tema_atual("claro")
+
     def test_ausencia_de_backup_no_rodape_da_venda(self):
         """Valida que os botoes de backup foram removidos do rodape da tela de venda."""
         try:

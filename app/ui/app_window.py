@@ -79,6 +79,13 @@ from tema import (
 )
 BANDEIRAS_DEBITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
 BANDEIRAS_CREDITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
+FORMAS_PGTO_MISTO = ("Dinheiro", "Debito", "Credito", "Pix")
+ROTULOS_PGTO = {
+    "Dinheiro": "Dinheiro",
+    "Debito": "Débito",
+    "Credito": "Crédito",
+    "Pix": "Pix",
+}
 PARCELAS_CREDITO = [str(i) for i in range(1, 13)]
 PLACEHOLDER_BUSCA = "Escaneie o código ou busque pelo nome"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -514,7 +521,7 @@ class CaixaApp(tk.Tk):
 
         self._card_status = Card(pad, padding=16, bg=theme.VERDE_ESC)
         self._card_status.pack(fill="x", pady=(0, 12))
-        tk.Label(self._card_status, text="Pr?ximo passo", bg=theme.VERDE_ESC, fg="#CFEBDD", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(self._card_status, text="Próximo passo", bg=theme.VERDE_ESC, fg="#CFEBDD", font=("Segoe UI", 9, "bold")).pack(anchor="w")
         self._lbl_status_fluxo = tk.Label(self._card_status, text="", bg=theme.VERDE_ESC, fg=theme.BRANCO, font=("Segoe UI", 13, "bold"), wraplength=230, justify="left")
         self._lbl_status_fluxo.pack(anchor="w", pady=(8, 4))
         self._lbl_status_aux = tk.Label(self._card_status, text="", bg=theme.VERDE_ESC, fg="#DDF4EA", font=("Segoe UI", 9), wraplength=230, justify="left")
@@ -523,8 +530,8 @@ class CaixaApp(tk.Tk):
         card_responsavel = Card(pad, padding=14)
         self._card_responsavel = card_responsavel
         card_responsavel.pack(fill="x", pady=(0, 12))
-        tk.Label(card_responsavel, text="RESPONS?VEL DO PER?ODO", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        tk.Label(card_responsavel, text="O nome informado sai no relat?rio exportado.", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 8))
+        tk.Label(card_responsavel, text="RESPONSÁVEL DO PERÍODO", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(card_responsavel, text="O nome informado sai no relatório exportado.", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 8))
         self._var_responsavel = tk.StringVar()
         self._var_responsavel.trace_add("write", self._salvar_responsavel_periodo)
         self._entry_responsavel = tk.Entry(card_responsavel, textvariable=self._var_responsavel, font=("Segoe UI", 11), relief="flat", bg=theme.FUNDO2, fg=theme.TEXTO, insertbackground=theme.VERDE_ESC, bd=0)
@@ -558,7 +565,7 @@ class CaixaApp(tk.Tk):
         for i in range(2):
             grid_pgto.columnconfigure(i, weight=1, uniform="pgto")
         self._btns_pgto = {}
-        pgto_info = [("Debito", "Cart?o de d?bito", 0, 0), ("Credito", "Cart?o de cr?dito", 0, 1), ("Pix", "Pix", 1, 0), ("Dinheiro", "Dinheiro", 1, 1), ("Mais de uma forma", "Mais de uma forma", 2, 0)]
+        pgto_info = [("Debito", "Cartão de débito", 0, 0), ("Credito", "Cartão de crédito", 0, 1), ("Pix", "Pix", 1, 0), ("Dinheiro", "Dinheiro", 1, 1), ("Mais de uma forma", "Mais de uma forma", 2, 0)]
         for nome, texto, row, col in pgto_info:
             btn = action_button(
                 grid_pgto,
@@ -575,7 +582,7 @@ class CaixaApp(tk.Tk):
             btn.grid(row=row, column=col, columnspan=2 if nome == "Mais de uma forma" else 1, padx=4, pady=4, sticky="nsew")
             self._btns_pgto[nome] = btn
 
-        self._lbl_ajuda = tk.Label(pad, text="Enter adiciona o item mais prov?vel.", bg=theme.FUNDO, fg=theme.MUTED, font=("Segoe UI", 9))
+        self._lbl_ajuda = tk.Label(pad, text="Enter adiciona o item mais provável.", bg=theme.FUNDO, fg=theme.MUTED, font=("Segoe UI", 9))
         self._lbl_ajuda.pack(anchor="w", pady=(10, 0))
 
     def _build_footer(self, parent):
@@ -589,13 +596,13 @@ class CaixaApp(tk.Tk):
         acoes_footer.pack(side="right", padx=12, pady=6)
         stats = tk.Frame(footer, bg=theme.BRANCO)
         stats.pack(side="left", fill="x", expand=True, padx=16, pady=8)
-        tk.Label(stats, text="Per?odo", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(stats, text="Período", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(side="left")
         self._lbl_periodo = tk.Label(stats, text="01", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 9, "bold"))
         self._lbl_periodo.pack(side="left", padx=(4, 16))
-        tk.Label(stats, text="Vendas no per?odo", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(stats, text="Vendas no período", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(side="left")
         self._lbl_vendas_dia = tk.Label(stats, text="0", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 9, "bold"))
         self._lbl_vendas_dia.pack(side="left", padx=(4, 16))
-        tk.Label(stats, text="Total do per?odo", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(stats, text="Total do período", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(side="left")
         self._lbl_total_dia = tk.Label(stats, text="R$ 0,00", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 9, "bold"))
         self._lbl_total_dia.pack(side="left", padx=(4, 0))
 
@@ -1247,11 +1254,11 @@ class CaixaApp(tk.Tk):
         tk.Label(frame, text="Selecione duas formas de pagamento", bg=theme.FUNDO, fg=theme.TEXTO, font=("Segoe UI", 13, "bold")).pack(
             anchor="w"
         )
-        tk.Label(frame, text="O detalhe aparecera no historico e na planilha.", bg=theme.FUNDO, fg=theme.MUTED, font=("Segoe UI", 10)).pack(
+        tk.Label(frame, text="O detalhe aparecerá no histórico e na planilha.", bg=theme.FUNDO, fg=theme.MUTED, font=("Segoe UI", 10)).pack(
             anchor="w", pady=(4, 10)
         )
 
-        vars_pgto = {forma: tk.BooleanVar(value=False) for forma in FORMAS_PGTO}
+        vars_pgto = {forma: tk.BooleanVar(value=False) for forma in FORMAS_PGTO_MISTO}
         detalhes_cartao = {}
 
         def detalhe_texto(forma: str) -> str:
@@ -1274,13 +1281,13 @@ class CaixaApp(tk.Tk):
             else:
                 info["card"].pack_forget()
 
-        for forma in FORMAS_PGTO:
+        for forma in FORMAS_PGTO_MISTO:
             linha = tk.Frame(frame, bg=theme.FUNDO)
             linha.pack(fill="x", pady=2)
 
             check = tk.Checkbutton(
                 linha,
-                text=forma,
+                text=ROTULOS_PGTO[forma],
                 variable=vars_pgto[forma],
                 bg=theme.FUNDO,
                 fg=theme.TEXTO,
