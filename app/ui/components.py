@@ -32,7 +32,7 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
         "TNotebook",
         background=tema["bg"],
         borderwidth=0,
-        tabmargins=(10, 2, 10, 0),
+        tabmargins=(18, 8, 18, 0),
     )
     style.configure(
         "TNotebook.Tab",
@@ -54,8 +54,11 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
         background=tema["surface"],
         fieldbackground=tema["surface"],
         foreground=tema["text"],
-        rowheight=34,
-        bordercolor=tema["border_soft"],
+        rowheight=38,
+        bordercolor=tema["surface"],
+        lightcolor=tema["surface"],
+        darkcolor=tema["surface"],
+        relief="flat",
         borderwidth=0,
         font=FONTES["corpo"],
     )
@@ -65,6 +68,11 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
         padding=(8, 6),
         background=tema["surface_2"],
         foreground=tema["text"],
+        bordercolor=tema["surface_2"],
+        lightcolor=tema["surface_2"],
+        darkcolor=tema["surface_2"],
+        relief="flat",
+        borderwidth=0,
     )
     style.map(
         "Treeview",
@@ -642,7 +650,7 @@ class DataTable(ttk.Treeview):
             self.column(col, width=widths.get(col, 100), anchor="center")
 
         tema = obter_tema_atual()
-        self.tag_configure("odd", background=tema["surface_3"])
+        self.tag_configure("odd", background=tema["surface"])
         self.tag_configure("even", background=tema["surface"])
 
 

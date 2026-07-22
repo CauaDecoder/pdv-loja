@@ -56,6 +56,7 @@ from app.ui.vendas_correcoes_view import VendasCorrecoesView
 from estoque.dashboard import DashboardEstoque
 from estoque.painel import PainelEstoque
 from app.ui.components import (
+    BaseModal,
     Card,
     DataTable,
     EmptyState,
@@ -64,6 +65,7 @@ from app.ui.components import (
     SearchInput,
     SectionHeader,
     StatusBadge,
+    StyledEntry,
     action_button,
     apply_theme_to_widget_tree,
     bind_escape_to_close,
@@ -75,6 +77,7 @@ from tema import (
     moeda,
     obter_nome_tema_atual,
 )
+BANDEIRAS_DEBITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
 BANDEIRAS_CREDITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
 PARCELAS_CREDITO = [str(i) for i in range(1, 13)]
 PLACEHOLDER_BUSCA = "Escaneie o código ou busque pelo nome"
@@ -111,15 +114,25 @@ class MovimentacoesEstoque(tk.Frame):
         ):
             bloco = tk.Frame(linha, bg=theme.BRANCO)
             bloco.pack(side="left", padx=(0, 10))
-            tk.Label(bloco, text=texto, bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w")
-            tk.Entry(bloco, textvariable=var, bg=theme.FUNDO2, fg=theme.TEXTO, relief="flat", width=largura).pack(fill="x", ipady=6)
-        ttk.Combobox(
-            linha,
+            tk.Label(bloco, text=texto, bg=theme.BRANCO, fg=theme.MUTED, font=FONTES["label_sm"]).pack(anchor="w")
+            StyledEntry(bloco, textvariable=var, width=largura).pack(fill="x", ipady=7, pady=(3, 0))
+        bloco_tipo = tk.Frame(linha, bg=theme.BRANCO)
+        bloco_tipo.pack(side="left", padx=(0, 10))
+        tk.Label(
+            bloco_tipo,
+            text="Tipo",
+            bg=theme.BRANCO,
+            fg=theme.MUTED,
+            font=FONTES["label_sm"],
+        ).pack(anchor="w")
+        self._tipo_box = ttk.Combobox(
+            bloco_tipo,
             textvariable=self._var_tipo,
             values=["Todos", "ENTRADA", "VENDA", "PERDA", "AJUSTE", "INVENTARIO"],
             state="readonly",
             width=16,
-        ).pack(side="left", padx=(0, 10), ipady=3)
+        )
+        self._tipo_box.pack(fill="x", ipady=2, pady=(3, 0))
 
         box = Card(self, padding=0)
         box.pack(fill="both", expand=True, padx=18, pady=(0, 14))
@@ -281,7 +294,7 @@ class CaixaApp(tk.Tk):
         self._content_wrap.pack(fill="both", expand=True)
 
         self._notebook = ttk.Notebook(self._content_wrap, style="TNotebook")
-        self._notebook.pack(fill="both", expand=True, padx=18, pady=(4, 0))
+        self._notebook.pack(fill="both", expand=True, padx=0, pady=(4, 0))
 
         self._aba_venda = tk.Frame(self._notebook, bg=theme.TEMA_ATUAL["fundo"])
         self._aba_vendas_correcoes = tk.Frame(self._notebook, bg=theme.TEMA_ATUAL["fundo"])
@@ -320,7 +333,7 @@ class CaixaApp(tk.Tk):
         estoque_wrap = tk.Frame(self._aba_estoque, bg=theme.TEMA_ATUAL["fundo"])
         estoque_wrap.pack(fill="both", expand=True)
         self._estoque_notebook = ttk.Notebook(estoque_wrap, style="TNotebook")
-        self._estoque_notebook.pack(fill="both", expand=True, padx=18, pady=(0, 0))
+        self._estoque_notebook.pack(fill="both", expand=True, padx=0, pady=(0, 0))
 
         aba_dashboard = tk.Frame(self._estoque_notebook, bg=theme.TEMA_ATUAL["fundo"])
         aba_produtos = tk.Frame(self._estoque_notebook, bg=theme.TEMA_ATUAL["fundo"])
@@ -1379,48 +1392,44 @@ class CaixaApp(tk.Tk):
     def _coletar_bandeira(self, tipo: str) -> bool:
         """Solicita bandeira e, no credito, quantidade de parcelas."""
         bandeiras = BANDEIRAS_DEBITO if tipo == "Debito" else BANDEIRAS_CREDITO
-        dialog = tk.Toplevel(self)
-        dialog.title("Bandeira do cartao")
-        dialog.configure(bg=theme.FUNDO)
+        eh_debito = tipo == "Debito"
+        dialog = BaseModal(
+            self,
+            title="Cartão de débito" if eh_debito else "Cartão de crédito",
+            subtitle="Informe os dados que serão registrados na venda e no relatório.",
+            width=480,
+            height=350 if eh_debito else 410,
+        )
         dialog.resizable(False, False)
-        dialog.transient(self)
-        dialog.grab_set()
-        bind_escape_to_close(dialog)
-
-        frame = tk.Frame(dialog, bg=theme.FUNDO, padx=18, pady=16)
+        frame = Card(dialog.body_frame, padding=16)
         frame.pack(fill="both", expand=True)
-        titulo = "Escolha a bandeira do cartao de debito" if tipo == "Debito" else "Escolha a bandeira do cartao de credito"
-        tk.Label(frame, text=titulo, bg=theme.FUNDO, fg=theme.TEXTO, font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        tk.Label(
-            frame,
-            text="A bandeira sera registrada na venda e na planilha.",
-            bg=theme.FUNDO,
-            fg=theme.MUTED,
-            font=("Segoe UI", 10),
-        ).pack(anchor="w", pady=(4, 10))
 
         escolhida = tk.StringVar(value=bandeiras[0])
-        linha = tk.Frame(frame, bg=theme.FUNDO)
-        linha.pack(fill="x")
-        for bandeira in bandeiras:
-            tk.Radiobutton(
-                linha,
-                text=bandeira,
-                value=bandeira,
-                variable=escolhida,
-                bg=theme.FUNDO,
-                fg=theme.TEXTO,
-                selectcolor=theme.BRANCO,
-                activebackground=theme.FUNDO,
-                font=("Segoe UI", 11),
-                anchor="w",
-            ).pack(fill="x", pady=2)
+        tk.Label(
+            frame,
+            text="Bandeira",
+            bg=theme.BRANCO,
+            fg=theme.MUTED,
+            font=FONTES["label_sm"],
+        ).pack(anchor="w")
+        bandeira_box = ttk.Combobox(
+            frame,
+            textvariable=escolhida,
+            values=bandeiras,
+            state="readonly",
+            font=FONTES["corpo"],
+        )
+        bandeira_box.pack(fill="x", pady=(4, 12), ipady=4)
 
         parcela_var = tk.StringVar(value="1")
-        if tipo == "Credito":
-            tk.Label(frame, text="Quantidade de parcelas", bg=theme.FUNDO, fg=theme.MUTED, font=("Segoe UI", 10, "bold")).pack(
-                anchor="w", pady=(12, 4)
-            )
+        if not eh_debito:
+            tk.Label(
+                frame,
+                text="Parcelas",
+                bg=theme.BRANCO,
+                fg=theme.MUTED,
+                font=FONTES["label_sm"],
+            ).pack(anchor="w")
             parcela_box = ttk.Combobox(
                 frame,
                 textvariable=parcela_var,
@@ -1429,29 +1438,27 @@ class CaixaApp(tk.Tk):
                 width=8,
                 font=("Segoe UI", 11),
             )
-            parcela_box.pack(anchor="w")
+            parcela_box.pack(fill="x", pady=(4, 0), ipady=4)
             parcela_box.set("1")
 
         resultado = {"ok": False}
 
         def confirmar():
             resultado["ok"] = True
-            dialog.destroy()
+            dialog.close()
 
-        botoes = tk.Frame(frame, bg=theme.FUNDO)
-        botoes.pack(fill="x", pady=(14, 0))
-        tk.Button(botoes, text="Cancelar", bg=theme.FUNDO2, fg=theme.MUTED, relief="flat", command=dialog.destroy).pack(
-            side="right", padx=(8, 0), ipadx=10, ipady=6
+        action_button(dialog.footer_frame, text="Cancelar", variant="ghost", command=dialog.close).pack(
+            side="right", padx=(8, 0)
         )
-        tk.Button(botoes, text="Confirmar", bg=theme.VERDE_ESC, fg=theme.BRANCO, relief="flat", command=confirmar).pack(
-            side="right", ipadx=10, ipady=6
-        )
+        action_button(dialog.footer_frame, text="Confirmar", variant="primary", command=confirmar).pack(side="right")
+        dialog.bind("<Return>", lambda _event: confirmar())
+        bandeira_box.focus_set()
         self.wait_window(dialog)
 
         if not resultado["ok"]:
             return False
         detalhe = escolhida.get().strip()
-        if tipo == "Credito":
+        if not eh_debito:
             detalhe = f"{detalhe} | {parcela_var.get().strip()}x"
         self._pagamento_detalhe = detalhe
         self._valor_recebido = None

@@ -59,7 +59,7 @@ class ConfiguracoesUITest(unittest.TestCase):
             # Alterna de volta para claro
             root._alternar_tema("claro")
             self.assertEqual(tema.obter_nome_tema_atual(), "claro")
-            self.assertEqual(tema.obter_tema_atual()["bg"], "#F6F3EC")
+            self.assertEqual(tema.obter_tema_atual()["bg"], "#F3F5F4")
             self.assertEqual(root._var_tema_opcao.get(), "claro")
         finally:
             root.destroy()

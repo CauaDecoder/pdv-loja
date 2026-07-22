@@ -131,6 +131,69 @@ class VendaVarianteAUITest(unittest.TestCase):
         finally:
             app.destroy()
 
+    def test_debito_abre_modal_e_seleciona_pagamento(self):
+        """Débito deve concluir a seleção usando o modal real de cartão."""
+        try:
+            app = CaixaApp()
+            app.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        def confirmar_modal(tentativas=20):
+            modais = [
+                filho
+                for filho in app.winfo_children()
+                if isinstance(filho, tk.Toplevel)
+            ]
+            if not modais and tentativas:
+                app.after(20, lambda: confirmar_modal(tentativas - 1))
+                return
+            self.assertTrue(modais, "O modal de cartão não foi aberto")
+            modal = modais[0]
+            botoes = []
+            pendentes = [modal]
+            while pendentes:
+                widget = pendentes.pop()
+                pendentes.extend(widget.winfo_children())
+                if isinstance(widget, tk.Button):
+                    botoes.append(widget)
+            confirmar = next(
+                botao for botao in botoes if botao.cget("text") == "Confirmar"
+            )
+            confirmar.invoke()
+
+        try:
+            app.after(20, confirmar_modal)
+            app._selecionar_pgto("Debito")
+
+            self.assertEqual(app._pagamento, "Debito")
+            self.assertTrue(app._pagamento_detalhe)
+            self.assertEqual(app._btn_finalizar.cget("state"), "disabled")
+        finally:
+            app.destroy()
+
+    def test_abas_usam_uma_unica_margem_de_pagina(self):
+        """Notebooks não devem somar molduras às margens internas das telas."""
+        try:
+            app = CaixaApp()
+            app.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            self.assertEqual(int(app._notebook.pack_info()["padx"]), 0)
+            self.assertEqual(int(app._estoque_notebook.pack_info()["padx"]), 0)
+            rotulos = [
+                widget.cget("text")
+                for widget in app._estoque_movimentacoes._tipo_box.master.winfo_children()
+                if isinstance(widget, tk.Label)
+            ]
+            self.assertIn("Tipo", rotulos)
+        finally:
+            app.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()
