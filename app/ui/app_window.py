@@ -40,6 +40,7 @@ from app.ui.components import (
 )
 from app.ui.importacao_dialog import confirmar_importacao
 from app.ui.vendas_correcoes_view import VendasCorrecoesView
+from app.ui.importacao_view import ImportacaoGuidedView
 from estoque.dashboard import DashboardEstoque
 from estoque.painel import PainelEstoque
 from tema import (
@@ -535,10 +536,8 @@ class CaixaApp(tk.Tk):
 
         for label, fg, callback in (
             ("Encerrar dia", VERDE_ESC, self._encerrar_dia),
-            ("Exportar relat?rio", AZUL, self._exportar_relatorio),
+            ("Exportar relatório", AZUL, self._exportar_relatorio),
             ("Importar produtos", MUTED, self._importar_planilha),
-            ("Restaurar backup", MUTED, self._restaurar_backup),
-            ("Criar backup", MUTED, self._criar_backup),
         ):
             tk.Button(acoes_footer, text=label, bg=BRANCO, fg=fg, font=("Segoe UI", 9), relief="flat", cursor="hand2", padx=10, pady=8, command=callback).pack(side="right", padx=(0, 4))
 
@@ -555,40 +554,12 @@ class CaixaApp(tk.Tk):
         self._build_vendas_correcoes_tab()
 
     def _build_importacao_tab(self):
-        """Monta o frame da casca para a aba de Importação (preparatório para #13)."""
-        pad = tk.Frame(self._aba_importacao, bg=TEMA_ATUAL["fundo"], padx=18, pady=16)
-        pad.pack(fill="both", expand=True)
-
-        PageHeader(
-            pad,
-            "Importação de produtos",
-            "Fluxo guiado em etapas para importar planilhas e conferir impactos no estoque.",
-        ).pack(fill="x", pady=(0, 16))
-
-        card = Card(pad, padding=20)
-        card.pack(fill="x", pady=(0, 16))
-
-        SectionHeader(
-            card,
-            "Importação de produtos (Conta Azul)",
-            "Selecione um arquivo CSV/XLSX para atualizar o catálogo de produtos e saldos.",
-        ).pack(anchor="w", fill="x", pady=(0, 14))
-
-        tk.Label(
-            card,
-            text="O redesign completo em etapas (arquivo, modo, conferência e confirmação) será implementado na issue #13.",
-            bg=TEMA_ATUAL["surface"],
-            fg=TEMA_ATUAL["texto_suave"],
-            font=FONTES["corpo"],
-        ).pack(anchor="w", pady=(0, 16))
-
-        action_button(
-            card,
-            text="Iniciar importação de planilha",
-            command=self._importar_planilha,
-            bg=TEMA_ATUAL["primaria"],
-            fg="#FFFFFF",
-        ).pack(anchor="w")
+        """Monta o fluxo guiado em 4 etapas da aba de Importação (Issue #14)."""
+        self._importacao_view = ImportacaoGuidedView(
+            self._aba_importacao,
+            on_import_complete=self._atualizar_painel_estoque,
+        )
+        self._importacao_view.pack(fill="both", expand=True)
 
     def _build_relatorios_tab(self):
         """Monta o frame da casca para a aba de Relatórios (preparatório para #14)."""
@@ -637,91 +608,137 @@ class CaixaApp(tk.Tk):
             "Gerencie preferências visuais de tema, manutenção do banco de dados e backups.",
         ).pack(fill="x", pady=(0, 16))
 
-        # Card de Tema
+        # --- SEÇÃO 1: Preferências Gerais / Tema Visual ---
         card_tema = Card(pad, padding=20)
         card_tema.pack(fill="x", pady=(0, 16))
 
         SectionHeader(
             card_tema,
             "Aparência e Tema Visual",
-            "Escolha o tema de cores para a interface do PDV. O padrão é o Tema Claro.",
+            "Escolha o tema de cores para a interface do PDV. O Tema Claro é o padrão da operação.",
         ).pack(anchor="w", fill="x", pady=(0, 14))
 
         box_botoes_tema = tk.Frame(card_tema, bg=TEMA_ATUAL["surface"])
         box_botoes_tema.pack(anchor="w")
 
-        self._var_tema_opcao = tk.StringVar(value=obter_nome_tema_atual())
+        if not hasattr(self, "_var_tema_opcao"):
+            self._var_tema_opcao = tk.StringVar(value=obter_nome_tema_atual())
+        else:
+            self._var_tema_opcao.set(obter_nome_tema_atual())
 
-        btn_claro = tk.Radiobutton(
-            box_botoes_tema,
-            text="Tema Claro (Padrão)",
-            value="claro",
-            variable=self._var_tema_opcao,
-            command=lambda: self._alternar_tema("claro"),
-            bg=TEMA_ATUAL["surface"],
-            fg=TEMA_ATUAL["texto"],
-            activebackground=TEMA_ATUAL["surface"],
-            activeforeground=TEMA_ATUAL["texto"],
-            font=FONTES["botao"],
-            selectcolor=TEMA_ATUAL["surface"],
-            cursor="hand2",
-            padx=10,
-            pady=6,
-        )
-        btn_claro.pack(side="left", padx=(0, 16))
+        for valor_tema, texto_tema in (("claro", "☀️ Tema Claro (Padrão)"), ("escuro", "🌙 Tema Escuro")):
+            frame_opcao = tk.Frame(box_botoes_tema, bg=TEMA_ATUAL["surface_2"], padx=12, pady=8)
+            frame_opcao.pack(side="left", padx=(0, 12))
 
-        btn_escuro = tk.Radiobutton(
-            box_botoes_tema,
-            text="Tema Escuro",
-            value="escuro",
-            variable=self._var_tema_opcao,
-            command=lambda: self._alternar_tema("escuro"),
-            bg=TEMA_ATUAL["surface"],
-            fg=TEMA_ATUAL["texto"],
-            activebackground=TEMA_ATUAL["surface"],
-            activeforeground=TEMA_ATUAL["texto"],
-            font=FONTES["botao"],
-            selectcolor=TEMA_ATUAL["surface"],
-            cursor="hand2",
-            padx=10,
-            pady=6,
-        )
-        btn_escuro.pack(side="left")
+            rb = tk.Radiobutton(
+                frame_opcao,
+                text=texto_tema,
+                value=valor_tema,
+                variable=self._var_tema_opcao,
+                command=lambda t=valor_tema: self._alternar_tema(t),
+                bg=TEMA_ATUAL["surface_2"],
+                fg=TEMA_ATUAL["texto"],
+                activebackground=TEMA_ATUAL["surface_2"],
+                activeforeground=TEMA_ATUAL["texto"],
+                font=FONTES["corpo_bold"],
+                selectcolor=TEMA_ATUAL["surface_2"],
+                cursor="hand2",
+            )
+            rb.pack(side="left", padx=(0, 6))
 
-        # Card de Manutenção (Backup e Restauração)
+            if obter_nome_tema_atual() == valor_tema:
+                badge = StatusBadge(frame_opcao, "Ativo", bg=TEMA_ATUAL["primary_soft"], fg=TEMA_ATUAL["primary"])
+                badge.pack(side="left")
+
+        # --- SEÇÃO 2: Manutenção Sensível e Backup ---
         card_maint = Card(pad, padding=20)
         card_maint.pack(fill="x", pady=(0, 16))
 
         SectionHeader(
             card_maint,
-            "Manutenção e Backup",
-            "Crie cópias de segurança do banco de dados local ou restaure a partir de um backup existente.",
-        ).pack(anchor="w", fill="x", pady=(0, 14))
+            "Manutenção e Banco de Dados",
+            "Área reservada para geração de backups e restauração do banco de dados SQLite local.",
+        ).pack(anchor="w", fill="x", pady=(0, 16))
 
-        box_botoes_maint = tk.Frame(card_maint, bg=TEMA_ATUAL["surface"])
-        box_botoes_maint.pack(anchor="w")
+        # Bloco A: Criar Backup (Apresentação Simples)
+        box_criar = tk.Frame(card_maint, bg=TEMA_ATUAL["surface_2"], padx=16, pady=14)
+        box_criar.pack(fill="x", pady=(0, 16))
 
-        action_button(
-            box_botoes_maint,
-            text="Criar backup",
-            command=self._criar_backup,
-            bg=TEMA_ATUAL["surface_hover"],
+        tk.Label(
+            box_criar,
+            text="Criar Backup de Segurança",
+            bg=TEMA_ATUAL["surface_2"],
             fg=TEMA_ATUAL["texto"],
-        ).pack(side="left", padx=(0, 10))
+            font=FONTES["subtitulo"],
+        ).pack(anchor="w")
+
+        tk.Label(
+            box_criar,
+            text="Gera uma cópia imediata do banco de dados na pasta de backups local (backups/). Recomendado antes de manutenções.",
+            bg=TEMA_ATUAL["surface_2"],
+            fg=TEMA_ATUAL["texto_suave"],
+            font=FONTES["corpo"],
+            wraplength=700,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 10))
 
         action_button(
-            box_botoes_maint,
-            text="Restaurar backup",
-            command=self._restaurar_backup,
-            bg=TEMA_ATUAL["perigo_suave"],
-            fg=TEMA_ATUAL["perigo"],
+            box_criar,
+            text="📦 Criar backup agora",
+            command=self._criar_backup,
+            bg=TEMA_ATUAL["primary"],
+            fg="#FFFFFF",
+        ).pack(anchor="w")
+
+        # Bloco B: Restaurar Backup (Linguagem de Risco e Confirmação Forte)
+        box_restaurar = tk.Frame(card_maint, bg=TEMA_ATUAL["danger_soft"], padx=16, pady=14)
+        box_restaurar.pack(fill="x")
+
+        hdr_restaurar = tk.Frame(box_restaurar, bg=TEMA_ATUAL["danger_soft"])
+        hdr_restaurar.pack(fill="x", anchor="w")
+
+        tk.Label(
+            hdr_restaurar,
+            text="Restaurar Banco de Dados",
+            bg=TEMA_ATUAL["danger_soft"],
+            fg=TEMA_ATUAL["danger"],
+            font=FONTES["subtitulo"],
         ).pack(side="left")
+
+        badge_risco = StatusBadge(hdr_restaurar, "AÇÃO SENSÍVEL DE MANUTENÇÃO", bg=TEMA_ATUAL["danger"], fg="#FFFFFF")
+        badge_risco.pack(side="left", padx=(10, 0))
+
+        tk.Label(
+            box_restaurar,
+            text="⚠️ ATENÇÃO: A restauração de backup substitui todos os dados atuais do caixa (vendas, estoque e histórico) pelas informações do arquivo selecionado. Um backup de segurança do estado atual é criado automaticamente antes da substituição.",
+            bg=TEMA_ATUAL["danger_soft"],
+            fg=TEMA_ATUAL["texto"],
+            font=FONTES["corpo_bold"],
+            wraplength=720,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 12))
+
+        action_button(
+            box_restaurar,
+            text="⚠️ Restaurar backup a partir de arquivo...",
+            command=self._restaurar_backup,
+            bg=TEMA_ATUAL["danger"],
+            fg="#FFFFFF",
+        ).pack(anchor="w")
 
     def _alternar_tema(self, nome_tema: str):
         """Alterna dinamicamente entre tema claro e escuro."""
         definir_tema_atual(nome_tema)
         configure_styles(self, nome_tema)
         self._aplicar_tema_na_casca(nome_tema)
+        self._reconstruir_aba_configuracoes()
+
+    def _reconstruir_aba_configuracoes(self):
+        """Recontrói os widgets da aba de configurações para atualizar o tema."""
+        if hasattr(self, "_aba_configuracoes"):
+            for child in self._aba_configuracoes.winfo_children():
+                child.destroy()
+            self._build_configuracoes_tab()
 
     def _aplicar_tema_na_casca(self, nome_tema: str):
         """Aplica as cores do tema ativo nos elementos da casca principal."""
@@ -1572,27 +1589,38 @@ class CaixaApp(tk.Tk):
 
     def _restaurar_backup(self):
         arquivo = filedialog.askopenfilename(
-            title="Selecionar backup do banco",
+            title="Selecionar backup do banco de dados",
             initialdir=str(BACKUPS_DIR),
-            filetypes=[("Banco SQLite", "*.db"), ("Todos", "*.*")],
+            filetypes=[("Banco SQLite", "*.db"), ("Todos os arquivos", "*.*")],
         )
         if not arquivo:
             return
-        if not messagebox.askyesno(
-            "Restaurar backup",
-            "A restauracao substituirá os dados atuais. Um backup de seguranca sera criado antes.\n\nDeseja continuar?",
-        ):
+
+        caminho = Path(arquivo)
+        confirmar = messagebox.askyesno(
+            "⚠️ CONFIRMAÇÃO DE AÇÃO SENSÍVEL - RESTAURAR BACKUP",
+            "Você está prestes a RESTAURAR o banco de dados do sistema.\n\n"
+            "⚠️ ATENÇÃO E RISCO:\n"
+            "• O banco de dados atual SERÁ SUBSTITUÍDO pelo arquivo selecionado.\n"
+            "• Vendas recentes e alterações não salvas serão sobrescritas.\n"
+            "• Um backup de segurança do estado atual será criado automaticamente antes da restauração.\n\n"
+            f"Arquivo de backup selecionado:\n{caminho.name}\n\n"
+            "Deseja realmente prosseguir com a restauração do sistema?",
+            icon="warning",
+        )
+        if not confirmar:
             return
+
         try:
-            anterior = backup_service.restaurar_backup(Path(arquivo), db.DB_PATH, BACKUPS_DIR)
+            anterior = backup_service.restaurar_backup(caminho, db.DB_PATH, BACKUPS_DIR)
             db.inicializar()
             self._abrir_periodo_para_data(datetime.now().strftime("%d/%m/%Y"))
             self._atualizar_painel_estoque()
             self._atualizar_historico()
-            detalhe = f"\nBackup de seguranca: {anterior}" if anterior else ""
-            messagebox.showinfo("Restauracao concluida", f"Dados restaurados com sucesso.{detalhe}")
+            detalhe = f"\n\nBackup de segurança gerado antes da restauração:\n{anterior.name}" if anterior else ""
+            messagebox.showinfo("Restauração concluída", f"O banco de dados foi restaurado com sucesso.{detalhe}")
         except Exception as erro:
-            messagebox.showerror("Erro na restauracao", f"Nao foi possivel restaurar o backup.\n\n{erro}")
+            messagebox.showerror("Erro na restauração", f"Não foi possível restaurar o backup.\n\n{erro}")
 
     # ------------------------------------------------------------------
     # Ajustes visuais e sincronizacao da interface

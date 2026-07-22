@@ -308,12 +308,15 @@ class Panel(Card):
 class StatusBadge(tk.Label):
     """Badge em formato de pílula para status operacionais e de pagamentos."""
 
-    def __init__(self, parent: tk.Widget, text: str):
+    def __init__(self, parent: tk.Widget, text: str, bg: str | None = None, fg: str | None = None):
         tema = obter_tema_atual()
         badge_map = {
             "CRITICO": (tema["danger"], tema["danger_soft"]),
             "ALERTA": (tema["warning"], tema["warning_soft"]),
             "OK": (tema["primary"], tema["primary_soft"]),
+            "Ativo": (tema["primary"], tema["primary_soft"]),
+            "Padrão": (tema["info"], tema["info_soft"]),
+            "SENSIVEL": (tema["danger"], tema["danger_soft"]),
             "MORTO": (tema["text_muted"], tema["neutral_soft"]),
             "INATIVO": (tema["text_muted"], tema["neutral_soft"]),
             "Entrada": (tema["warning"], tema["warning_soft"]),
@@ -330,8 +333,10 @@ class StatusBadge(tk.Label):
             "CORRIGIDA": (tema["warning"], tema["warning_soft"]),
             "VALIDA": (tema["primary"], tema["primary_soft"]),
         }
-        fg, bg = badge_map.get(text, (tema["text"], tema["surface_2"]))
-        super().__init__(parent, text=text, bg=bg, fg=fg, font=FONTES["label_sm"], padx=8, pady=3)
+        default_fg, default_bg = badge_map.get(text, (tema["text"], tema["surface_2"]))
+        final_fg = fg or default_fg
+        final_bg = bg or default_bg
+        super().__init__(parent, text=text, bg=final_bg, fg=final_fg, font=FONTES["label_sm"], padx=8, pady=3)
 
 
 class PageHeader(tk.Frame):
