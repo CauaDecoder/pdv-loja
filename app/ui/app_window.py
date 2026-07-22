@@ -387,19 +387,27 @@ class CaixaApp(tk.Tk):
 
         hero = Card(pad, padding=14, bg=FUNDO2)
         hero.pack(fill="x", pady=(0, 12))
-        tk.Label(hero, text="Registro de venda", bg=FUNDO2, fg=TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        tk.Label(hero, text="Busque pelo nome, c?digo interno ou c?digo de barras para montar a venda.", bg=FUNDO2, fg=MUTED, font=("Segoe UI", 9), wraplength=560, justify="left").pack(anchor="w", pady=(4, 0))
+        tk.Label(hero, text="Registro de venda (Variante A)", bg=FUNDO2, fg=TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        tk.Label(hero, text="Busque pelo nome, código interno ou código de barras para montar a venda.", bg=FUNDO2, fg=MUTED, font=("Segoe UI", 9), wraplength=560, justify="left").pack(anchor="w", pady=(4, 0))
 
         search_card = Card(pad, padding=12)
         search_card.pack(fill="x", pady=(0, 12))
-        tk.Label(search_card, text="Buscar produto", bg=BRANCO, fg=MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+
+        search_hdr = tk.Frame(search_card, bg=BRANCO)
+        search_hdr.pack(fill="x")
+        tk.Label(search_hdr, text="BUSCAR PRODUTO", bg=BRANCO, fg=MUTED, font=("Segoe UI", 9, "bold")).pack(side="left")
+        tk.Label(search_hdr, text="[F2]", bg=FUNDO2, fg=MUTED, font=("Segoe UI", 8, "bold"), padx=4, pady=1).pack(side="right")
+
         self._var_busca = tk.StringVar()
-        search = SearchInput(search_card, self._var_busca, PLACEHOLDER_BUSCA)
+        search = SearchInput(search_card, self._var_busca, "Buscar por nome, código ou código de barras... [F2]")
         search.pack(fill="x", pady=(8, 8))
         self._entry_busca = search.entry
         self._entry_busca.bind("<Return>", self._on_enter_busca)
         self._entry_busca.bind("<Down>", self._focar_sugestao)
-        self._entry_busca.focus()
+        self._entry_busca.bind("<Escape>", lambda _: self._limpar_busca())
+        self.bind_all("<F2>", lambda _: self._focar_campo_busca())
+        self.after(100, lambda: self._entry_busca.focus() if hasattr(self, "_entry_busca") else None)
+
         self._frame_sugestoes = tk.Frame(search_card, bg=BRANCO)
         self._lst_sugestoes = tk.Listbox(self._frame_sugestoes, font=("Segoe UI", 10), bg=BRANCO, fg=TEXTO, selectbackground=VERDE_CLAR, selectforeground=VERDE_ESC, relief="flat", activestyle="none", highlightthickness=0)
         self._lst_sugestoes.pack(fill="both", expand=True)
@@ -417,7 +425,7 @@ class CaixaApp(tk.Tk):
         self._btn_limpar.pack(side="right")
         self._btn_limpar.pack_forget()
 
-        self._frame_vazio = EmptyState(pad, "Carrinho vazio", "Adicione produtos para liberar a sele??o de pagamento e a finaliza??o.")
+        self._frame_vazio = EmptyState(pad, "Carrinho vazio", "Adicione produtos para liberar a seleção de pagamento e a finalização.")
         self._frame_vazio.pack(fill="both", expand=True)
 
         self._frame_carrinho = tk.Frame(pad, bg=BRANCO)
@@ -431,6 +439,11 @@ class CaixaApp(tk.Tk):
         self._canvas_window = self._canvas_cart.create_window((0, 0), window=self._inner_cart, anchor="nw")
         self._inner_cart.bind("<Configure>", self._ajustar_scroll_carrinho)
         self._canvas_cart.bind("<Configure>", self._ajustar_largura_carrinho)
+
+        # Atalhos discretos no rodape do painel esquerdo
+        bar_atalhos = tk.Frame(pad, bg=FUNDO2, padx=8, pady=4)
+        bar_atalhos.pack(fill="x", side="bottom", pady=(8, 0))
+        tk.Label(bar_atalhos, text="Atalhos:  [F2] Buscar  |  [Enter] Confirmar  |  [Esc] Limpar busca", bg=FUNDO2, fg=MUTED, font=("Segoe UI", 8)).pack(anchor="w")
 
     def _build_right(self, parent):
         """Cria a coluna lateral com status, totais e pagamento."""
@@ -808,16 +821,37 @@ class CaixaApp(tk.Tk):
             self._entry_busca.focus_set()
             self._entry_busca.icursor("end")
 
+    def _limpar_busca(self):
+        """Limpa o termo de busca e esconde sugestoes."""
+        self._var_busca.set("")
+        self._esconder_sugestoes()
+        if hasattr(self, "_entry_busca") and self._entry_busca.winfo_exists():
+            self._entry_busca.focus()
+
+    def _focar_campo_busca(self, _=None):
+        """Foca no campo de busca de produtos."""
+        if hasattr(self, "_entry_busca") and self._entry_busca.winfo_exists():
+            self._notebook.select(self._aba_venda)
+            self._entry_busca.focus()
+            self._entry_busca.icursor("end")
+
     def _on_enter_busca(self, _=None):
-        """Adiciona o item mais provavel quando o operador pressiona Enter."""
+        """Adiciona o item mais provavel ou correspondencia unica quando o operador pressiona Enter."""
         termo = self._var_busca.get().strip()
         if not termo or termo == PLACEHOLDER_BUSCA:
             return
 
         resultado = db.buscar_produto(termo)
-        if resultado and (resultado[0]["codigo"] == termo or resultado[0]["cod_barras"] == termo):
-            self._adicionar_produto(dict(resultado[0]))
-        elif len(self._resultados_busca) == 1:
+        if resultado:
+            for prod in resultado:
+                if prod["codigo"] == termo or prod["cod_barras"] == termo:
+                    self._adicionar_produto(dict(prod))
+                    return
+            if len(resultado) == 1:
+                self._adicionar_produto(dict(resultado[0]))
+                return
+
+        if len(self._resultados_busca) == 1:
             self._adicionar_produto(dict(self._resultados_busca[0]))
 
     def _focar_sugestao(self, _=None):
@@ -829,6 +863,10 @@ class CaixaApp(tk.Tk):
 
     def _voltar_busca(self, _=None):
         """Retorna o foco ao campo de busca ao sair da lista de sugestoes."""
+        if self._lst_sugestoes and self._lst_sugestoes.curselection():
+            if self._lst_sugestoes.curselection()[0] == 0:
+                self._entry_busca.focus()
+                return "break"
         self._entry_busca.focus()
 
     def _on_selecionar_sugestao(self, _=None):
@@ -857,9 +895,11 @@ class CaixaApp(tk.Tk):
         self._entry_busca.focus()
 
         produto_id = produto["id"]
+        estoque = produto.get("estoque", 99)
         for item in self._carrinho:
             if item["produto_id"] == produto_id:
                 item["quantidade"] += 1
+                item["estoque"] = estoque
                 self._renderizar_carrinho()
                 self._atualizar_totais()
                 return
@@ -871,6 +911,7 @@ class CaixaApp(tk.Tk):
                 "nome": produto["nome"],
                 "preco_unit": produto["preco"],
                 "quantidade": 1,
+                "estoque": estoque,
             }
         )
         self._renderizar_carrinho()
@@ -929,13 +970,26 @@ class CaixaApp(tk.Tk):
             info = tk.Frame(row, bg=FUNDO2)
             info.pack(side="left", fill="x", expand=True)
             tk.Label(info, text=item["nome"], bg=FUNDO2, fg=TEXTO, font=("Segoe UI", 10, "bold"), wraplength=380, justify="left").pack(anchor="w")
+
+            sub_txt = f"Cod. {item['codigo']}  |  {moeda(item['preco_unit'])} por unidade"
             tk.Label(
                 info,
-                text=f"Cod. {item['codigo']}  |  {moeda(item['preco_unit'])} por unidade",
+                text=sub_txt,
                 bg=FUNDO2,
                 fg=MUTED,
                 font=("Segoe UI", 9),
-            ).pack(anchor="w", pady=(4, 0))
+            ).pack(anchor="w", pady=(2, 0))
+
+            # Alerta de Estoque Baixo (quando restarem 5 unidades ou menos)
+            estoque_restante = item.get("estoque")
+            if estoque_restante is not None and estoque_restante <= 5:
+                tk.Label(
+                    info,
+                    text=f"⚠️ Estoque baixo: {estoque_restante} produtos restantes",
+                    bg=FUNDO2,
+                    fg="#C9972C",
+                    font=("Segoe UI", 8, "bold"),
+                ).pack(anchor="w", pady=(2, 0))
 
             controls = tk.Frame(row, bg=FUNDO2)
             controls.pack(side="right")
@@ -1378,18 +1432,29 @@ class CaixaApp(tk.Tk):
         """Atualiza o card lateral com a proxima acao esperada."""
         if self._feedback_apos_venda:
             self._lbl_status_fluxo.config(text=self._feedback_apos_venda)
-            self._lbl_status_aux.config(text="O caixa ja esta pronto para registrar a venda seguinte.")
+            self._lbl_status_aux.config(text="O caixa já está pronto para registrar a venda seguinte.")
             return
+
+        # Verifica se algum item no carrinho possui estoque baixo (<= 5)
+        item_baixo = next((i for i in self._carrinho if i.get("estoque") is not None and i.get("estoque") <= 5), None)
+
         if not self._carrinho:
             self._lbl_status_fluxo.config(text="Adicione os produtos da venda.")
             self._lbl_status_aux.config(text="Depois escolha a forma de pagamento para liberar a finalização.")
             return
         if not self._pagamento:
             self._lbl_status_fluxo.config(text="Escolha a forma de pagamento.")
-            self._lbl_status_aux.config(text=f"Venda parcial em {moeda(self._total_carrinho())}.")
+            if item_baixo:
+                self._lbl_status_aux.config(text=f"⚠️ Atenção: {item_baixo['nome']} tem {item_baixo['estoque']} produtos restantes.")
+            else:
+                self._lbl_status_aux.config(text=f"Venda parcial em {moeda(self._total_carrinho())}.")
             return
+
         self._lbl_status_fluxo.config(text="Venda pronta para finalizar.")
-        self._lbl_status_aux.config(text=f"Pagamento selecionado: {self._resumo_pagamento()}.")
+        if item_baixo:
+            self._lbl_status_aux.config(text=f"Pagamento: {self._resumo_pagamento()} (⚠️ {item_baixo['estoque']} produtos restantes).")
+        else:
+            self._lbl_status_aux.config(text=f"Pagamento selecionado: {self._resumo_pagamento()}.")
 
     def _responsavel_atual(self) -> str:
         """Retorna o nome do responsavel vinculado ao periodo atual."""
