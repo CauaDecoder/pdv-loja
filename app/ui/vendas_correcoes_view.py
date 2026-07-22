@@ -377,8 +377,20 @@ class VendaDetailModal(tk.Toplevel):
         StatusBadge(right_hdr, badge_txt).pack(side="right")
 
         # Scrollable Content Area
-        content = tk.Frame(self, bg=TEMA_ATUAL["fundo"], padx=18)
-        content.pack(fill="both", expand=True)
+        canvas = tk.Canvas(self, bg=TEMA_ATUAL["fundo"], highlightthickness=0)
+        scroll = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+
+        content = tk.Frame(canvas, bg=TEMA_ATUAL["fundo"], padx=18, pady=4)
+        content.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas_window = canvas.create_window((0, 0), window=content, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width))
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
 
         # 1. Resumo Financeiro & Pagamento
         card_pag = Card(content, padding=14)
@@ -623,21 +635,20 @@ class VendaDetailModal(tk.Toplevel):
         ).pack(side="right", padx=(0, 8))
 
     def _alterar_pagamento(self):
-        """Abre o sub-diálogo para alterar o pagamento da venda."""
+        """Abre o sub-diálogo para alterar o pagamento da venda usando BaseModal."""
         det = self._detalhe
         per, num = self._identidade_venda()
 
-        sub = tk.Toplevel(self)
-        sub.title(f"Alterar pagamento da Venda #{num:03d}")
-        sub.geometry("450x500")
-        sub.configure(bg=TEMA_ATUAL["fundo"])
-        sub.transient(self)
-        sub.grab_set()
+        dialogo = BaseModal(
+            self,
+            title=f"Alterar pagamento - Venda #{num:03d}",
+            subtitle="Defina a nova forma de pagamento e o responsável pela alteração.",
+            width=480,
+            height=460,
+        )
 
-        pad = Card(sub, padding=18)
-        pad.pack(fill="both", expand=True, padx=14, pady=14)
-
-        SectionHeader(pad, "Alterar Forma de Pagamento", f"Defina a nova forma para a Venda #{num:03d}.").pack(anchor="w", fill="x", pady=(0, 10))
+        card = Card(dialogo.body_frame, padding=14)
+        card.pack(fill="both", expand=True)
 
         pagamento_atual = det.get("payment", {})
         var_pgto = tk.StringVar(value=pagamento_atual.get("method", "Pix"))
@@ -650,14 +661,14 @@ class VendaDetailModal(tk.Toplevel):
             value="" if pagamento_atual.get("change") is None else str(pagamento_atual["change"])
         )
 
-        tk.Label(pad, text="Forma de Pagamento", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        ttk.Combobox(pad, textvariable=var_pgto, values=FORMAS_PGTO, state="readonly").pack(fill="x", pady=(2, 10))
+        tk.Label(card, text="Forma de Pagamento", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
+        ttk.Combobox(card, textvariable=var_pgto, values=FORMAS_PGTO, state="readonly").pack(fill="x", pady=(2, 8))
 
-        tk.Label(pad, text="Detalhes (Bandeira/Parcelas)", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        StyledEntry(pad, textvariable=var_detalhe).pack(fill="x", ipady=4, pady=(2, 10))
+        tk.Label(card, text="Detalhes (Bandeira/Parcelas)", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
+        StyledEntry(card, textvariable=var_detalhe).pack(fill="x", ipady=4, pady=(2, 8))
 
-        valores = tk.Frame(pad, bg=TEMA_ATUAL["surface"])
-        valores.pack(fill="x", pady=(0, 10))
+        valores = tk.Frame(card, bg=TEMA_ATUAL["surface"])
+        valores.pack(fill="x", pady=(0, 8))
         for rotulo, variavel in (
             ("Valor Recebido (R$)", var_recebido),
             ("Troco (R$)", var_troco),
@@ -673,12 +684,14 @@ class VendaDetailModal(tk.Toplevel):
             ).pack(anchor="w")
             StyledEntry(campo, textvariable=variavel).pack(fill="x", ipady=4, pady=(2, 0))
 
-        tk.Label(pad, text="Responsável pela Alteração *", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        StyledEntry(pad, textvariable=var_resp).pack(fill="x", ipady=4, pady=(2, 14))
+        tk.Label(card, text="Responsável pela Alteração *", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
+        entry_resp = StyledEntry(card, textvariable=var_resp)
+        entry_resp.pack(fill="x", ipady=4, pady=(2, 8))
+        entry_resp.focus_set()
 
         def confirmar():
             if not var_resp.get().strip():
-                messagebox.showerror("Campo Obrigatório", "Informe o nome do responsável pela correção.", parent=sub)
+                messagebox.showerror("Campo Obrigatório", "Informe o nome do responsável pela correção.", parent=dialogo)
                 return
             try:
                 valor_recebido = ler_valor_monetario_opcional(
@@ -686,11 +699,11 @@ class VendaDetailModal(tk.Toplevel):
                 )
                 troco = ler_valor_monetario_opcional(var_troco.get(), "Troco")
             except ValueError as erro:
-                messagebox.showerror("Pagamento inválido", str(erro), parent=sub)
+                messagebox.showerror("Pagamento inválido", str(erro), parent=dialogo)
                 return
 
             self._confirmar_correcao(
-                parent=sub,
+                parent=dialogo,
                 titulo="Confirmar alteração de pagamento",
                 risco=(
                     f"Alterar o pagamento da Venda #{num:03d} para {var_pgto.get()}?\n\n"
@@ -709,13 +722,14 @@ class VendaDetailModal(tk.Toplevel):
                 titulo_erro="Não foi possível alterar o pagamento",
                 titulo_sucesso="Pagamento Atualizado",
                 mensagem_sucesso="A forma de pagamento da venda foi alterada com sucesso.",
-                fechar_ao_concluir=sub,
+                fechar_ao_concluir=dialogo,
             )
 
-        action_button(pad, text="Salvar Alteração", command=confirmar, variant="primary").pack(side="right", pady=(10, 0))
+        action_button(dialogo.footer_frame, text="Salvar Alteração", command=confirmar, variant="primary").pack(side="right")
+        action_button(dialogo.footer_frame, text="Cancelar", command=dialogo.close, variant="ghost").pack(side="right", padx=(0, 8))
 
     def _alterar_quantidade(self):
-        """Altera a quantidade de um item selecionado na tabela."""
+        """Altera a quantidade de um item selecionado na tabela usando BaseModal."""
         selecao = self._tree_items.selection()
         if not selecao:
             messagebox.showinfo("Selecionar Item", "Selecione um item na tabela acima para alterar a quantidade.", parent=self)
@@ -725,39 +739,41 @@ class VendaDetailModal(tk.Toplevel):
         det = self._detalhe
         per, num = self._identidade_venda()
 
-        sub = tk.Toplevel(self)
-        sub.title(f"Alterar quantidade - Item #{line_id}")
-        sub.geometry("420x300")
-        sub.configure(bg=TEMA_ATUAL["fundo"])
-        sub.transient(self)
-        sub.grab_set()
+        dialogo = BaseModal(
+            self,
+            title=f"Alterar quantidade - Item #{line_id}",
+            subtitle=f"Defina a nova quantidade para a linha da Venda #{num:03d}.",
+            width=440,
+            height=320,
+        )
 
-        pad = Card(sub, padding=18)
-        pad.pack(fill="both", expand=True, padx=14, pady=14)
-
-        SectionHeader(pad, "Alterar Quantidade do Item", f"Defina a nova quantidade para a linha #{line_id}.").pack(anchor="w", fill="x", pady=(0, 10))
+        card = Card(dialogo.body_frame, padding=14)
+        card.pack(fill="both", expand=True)
 
         var_qtd = tk.StringVar(value="1")
         var_resp = tk.StringVar()
 
-        tk.Label(pad, text="Nova Quantidade (Unidades)", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        StyledEntry(pad, textvariable=var_qtd).pack(fill="x", ipady=4, pady=(2, 10))
+        tk.Label(card, text="Nova Quantidade (Unidades) *", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
+        entry_qtd = StyledEntry(card, textvariable=var_qtd)
+        entry_qtd.pack(fill="x", ipady=4, pady=(2, 10))
 
-        tk.Label(pad, text="Responsável pela Alteração *", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        StyledEntry(pad, textvariable=var_resp).pack(fill="x", ipady=4, pady=(2, 14))
+        tk.Label(card, text="Responsável pela Alteração *", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
+        entry_resp = StyledEntry(card, textvariable=var_resp)
+        entry_resp.pack(fill="x", ipady=4, pady=(2, 10))
+        entry_qtd.focus_set()
 
         def confirmar():
             if not var_resp.get().strip():
-                messagebox.showerror("Campo Obrigatório", "Informe o responsável.", parent=sub)
+                messagebox.showerror("Campo Obrigatório", "Informe o responsável.", parent=dialogo)
                 return
             try:
                 quantidade = ler_quantidade(var_qtd.get())
             except ValueError as erro:
-                messagebox.showerror("Quantidade inválida", str(erro), parent=sub)
+                messagebox.showerror("Quantidade inválida", str(erro), parent=dialogo)
                 return
 
             self._confirmar_correcao(
-                parent=sub,
+                parent=dialogo,
                 titulo="Confirmar alteração de quantidade",
                 risco=(
                     f"Alterar a quantidade do item #{line_id} para {quantidade}?\n\n"
@@ -773,10 +789,11 @@ class VendaDetailModal(tk.Toplevel):
                 titulo_erro="Não foi possível alterar a quantidade",
                 titulo_sucesso="Quantidade Atualizada",
                 mensagem_sucesso="A quantidade do item foi alterada com sucesso.",
-                fechar_ao_concluir=sub,
+                fechar_ao_concluir=dialogo,
             )
 
-        action_button(pad, text="Salvar Quantidade", command=confirmar, variant="primary").pack(side="right", pady=(10, 0))
+        action_button(dialogo.footer_frame, text="Salvar Quantidade", command=confirmar, variant="primary").pack(side="right")
+        action_button(dialogo.footer_frame, text="Cancelar", command=dialogo.close, variant="ghost").pack(side="right", padx=(0, 8))
 
     def _remover_item(self):
         """Remove o item selecionado com confirmacao explicita de risco."""
