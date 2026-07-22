@@ -106,6 +106,132 @@ def alterar_pagamento_venda(
     return detalhe
 
 
+def alterar_quantidade_item_venda(
+    periodo_id: int,
+    num_venda: int,
+    line_id: int,
+    quantidade: int,
+    *,
+    responsavel: str,
+    observacao: str = "",
+) -> dict[str, Any]:
+    """Corrige a quantidade de uma linha e ajusta apenas a diferenca no estoque."""
+    quantidade = _normalizar_quantidade_item(quantidade)
+    antes: dict[str, Any] = {}
+    depois: dict[str, Any] = {}
+
+    with _transacao_correcao(
+        periodo_id=periodo_id,
+        num_venda=num_venda,
+        acao="alter_item_quantity",
+        responsavel=responsavel,
+        antes=antes,
+        depois=depois,
+        novo_status="corrected",
+        observacao=observacao,
+    ) as conn:
+        item = _obter_item_venda(conn, periodo_id, num_venda, line_id)
+        quantidade_anterior = int(item["quantidade"])
+        if quantidade == quantidade_anterior:
+            raise ValueError("A nova quantidade deve ser diferente da atual.")
+
+        antes.update(_item_para_contrato(item))
+        depois.update(antes)
+        depois["quantity"] = quantidade
+        depois["subtotal"] = float(item["preco_unit"]) * quantidade
+
+        diferenca_estoque = quantidade_anterior - quantidade
+        _registrar_ajuste_estoque_item(
+            conn,
+            item,
+            diferenca_estoque,
+            periodo_id=periodo_id,
+            num_venda=num_venda,
+            acao="QUANTIDADE",
+            responsavel=responsavel,
+        )
+        conn.execute(
+            """
+            UPDATE vendas
+            SET quantidade = ?, subtotal = ?
+            WHERE id = ? AND periodo_id = ? AND num_venda = ?
+            """,
+            (
+                quantidade,
+                depois["subtotal"],
+                int(item["id"]),
+                periodo_id,
+                num_venda,
+            ),
+        )
+
+    detalhe = obter_detalhe_venda(periodo_id, num_venda)
+    if detalhe is None:
+        raise RuntimeError("Venda corrigida nao encontrada para consulta.")
+    return detalhe
+
+
+def remover_item_venda(
+    periodo_id: int,
+    num_venda: int,
+    line_id: int,
+    *,
+    responsavel: str,
+    observacao: str = "",
+) -> dict[str, Any]:
+    """Remove uma linha da venda, devolvendo sua quantidade ao estoque."""
+    antes: dict[str, Any] = {}
+    depois: dict[str, Any] = {}
+
+    with _transacao_correcao(
+        periodo_id=periodo_id,
+        num_venda=num_venda,
+        acao="remove_item",
+        responsavel=responsavel,
+        antes=antes,
+        depois=depois,
+        novo_status="corrected",
+        observacao=observacao,
+    ) as conn:
+        item = _obter_item_venda(conn, periodo_id, num_venda, line_id)
+        total_itens = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM vendas
+            WHERE periodo_id = ? AND num_venda = ?
+            """,
+            (periodo_id, num_venda),
+        ).fetchone()[0]
+        if total_itens <= 1:
+            raise ValueError(
+                "A venda deve manter ao menos um item; use Cancelar venda."
+            )
+
+        antes.update(_item_para_contrato(item))
+        depois.update({"line_id": int(item["id"]), "removed": True})
+        _registrar_ajuste_estoque_item(
+            conn,
+            item,
+            int(item["quantidade"]),
+            periodo_id=periodo_id,
+            num_venda=num_venda,
+            acao="REMOCAO",
+            responsavel=responsavel,
+        )
+        conn.execute(
+            """
+            DELETE FROM vendas
+            WHERE id = ? AND periodo_id = ? AND num_venda = ?
+            """,
+            (int(item["id"]), periodo_id, num_venda),
+        )
+
+    detalhe = obter_detalhe_venda(periodo_id, num_venda)
+    if detalhe is None:
+        raise RuntimeError("Venda corrigida nao encontrada para consulta.")
+    return detalhe
+
+
 def cancelar_venda(
     periodo_id: int,
     num_venda: int,
@@ -512,6 +638,78 @@ def _normalizar_valor_pagamento(valor: float | None, campo: str) -> float | None
     return numero
 
 
+def _normalizar_quantidade_item(valor: Any) -> int:
+    if isinstance(valor, bool):
+        raise ValueError("Quantidade do item deve ser um numero inteiro positivo.")
+    try:
+        numero = float(valor)
+        quantidade = int(numero)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "Quantidade do item deve ser um numero inteiro positivo."
+        ) from exc
+    if not numero.is_integer() or quantidade <= 0:
+        raise ValueError("Quantidade do item deve ser um numero inteiro positivo.")
+    return quantidade
+
+
+def _obter_item_venda(
+    conn: sqlite3.Connection,
+    periodo_id: int,
+    num_venda: int,
+    line_id: int,
+) -> sqlite3.Row:
+    try:
+        line_id = int(line_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Item da venda nao encontrado.") from exc
+    item = conn.execute(
+        """
+        SELECT *
+        FROM vendas
+        WHERE id = ? AND periodo_id = ? AND num_venda = ?
+        """,
+        (line_id, periodo_id, num_venda),
+    ).fetchone()
+    if item is None:
+        raise ValueError("Item da venda nao encontrado.")
+    return item
+
+
+def _registrar_ajuste_estoque_item(
+    conn: sqlite3.Connection,
+    item: sqlite3.Row,
+    quantidade: int,
+    *,
+    periodo_id: int,
+    num_venda: int,
+    acao: str,
+    responsavel: str,
+) -> None:
+    produto_id = item["produto_id"]
+    if produto_id is None or quantidade == 0:
+        return
+    agora = datetime.now()
+    _registrar_movimentacao_estoque(
+        conn,
+        int(produto_id),
+        "AJUSTE",
+        quantidade,
+        agora.strftime("%d/%m/%Y"),
+        agora.strftime("%H:%M"),
+        referencia=(
+            f"CORRECAO_ITEM:{periodo_id}:{num_venda}:{int(item['id'])}:"
+            f"{agora.isoformat(timespec='microseconds')}"
+        ),
+        observacao=(
+            f"{acao.title()} do item da venda #{num_venda:03d}"
+        ),
+        responsavel=responsavel,
+        origem="CORRECAO_POS_VENDA",
+        alterar_saldo=True,
+    )
+
+
 def _item_para_contrato(linha: sqlite3.Row) -> dict[str, Any]:
     return {
         "line_id": int(linha["id"]),
@@ -566,10 +764,12 @@ __all__ = [
     "ACOES_CORRECAO",
     "FORMAS_PAGAMENTO",
     "STATUS_VALIDOS",
+    "alterar_quantidade_item_venda",
     "cancelar_venda",
     "alterar_pagamento_venda",
     "listar_vendas_correcoes",
     "obter_detalhe_venda",
     "registrar_correcao_venda",
     "registrar_venda",
+    "remover_item_venda",
 ]

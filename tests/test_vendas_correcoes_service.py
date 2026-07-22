@@ -839,3 +839,267 @@ def test_alterar_pagamento_rejeita_venda_inexistente_ou_cancelada():
         assert vendas_service.obter_detalhe_venda(periodo_id, 1)["correction_history"] == []
     finally:
         _limpar_banco_temporario(temp, original)
+
+
+def test_alterar_quantidade_item_ajusta_estoque_somente_pela_diferenca():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_id = _criar_produto("A", "Produto A", 12, estoque=10)
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_id,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 2,
+                    "preco_unit": 12,
+                }
+            ],
+            "Pix",
+            responsavel="Maria",
+            data="01/01/2026",
+        )
+        line_id = vendas_service.obter_detalhe_venda(periodo_id, 1)["items"][0][
+            "line_id"
+        ]
+
+        detalhe = vendas_service.alterar_quantidade_item_venda(
+            periodo_id,
+            1,
+            line_id,
+            5,
+            responsavel="Ana",
+            observacao="Leitor registrou quantidade menor",
+        )
+        detalhe = vendas_service.alterar_quantidade_item_venda(
+            periodo_id, 1, line_id, 1, responsavel="Ana"
+        )
+
+        with database.get_conn() as conn:
+            estoque = conn.execute(
+                "SELECT estoque FROM produtos WHERE id = ?", (produto_id,)
+            ).fetchone()["estoque"]
+        ajustes = [
+            dict(row) for row in database.listar_movimentacoes_estoque(tipo="AJUSTE")
+        ]
+
+        assert detalhe["status"] == "corrected"
+        assert detalhe["items"][0]["quantity"] == 1
+        assert detalhe["items"][0]["subtotal"] == 12
+        assert detalhe["totals"] == {"items": 1, "units": 1, "total": 12}
+        assert estoque == 9
+        assert [row["quantidade"] for row in reversed(ajustes)] == [-3, 4]
+        assert {row["origem"] for row in ajustes} == {"CORRECAO_POS_VENDA"}
+        assert detalhe["correction_history"][0]["action"] == "alter_item_quantity"
+        assert detalhe["correction_history"][0]["responsible"] == "Ana"
+        assert detalhe["correction_history"][0]["before"]["quantity"] == 2
+        assert detalhe["correction_history"][0]["after"]["quantity"] == 5
+        assert detalhe["correction_history"][0]["note"] == (
+            "Leitor registrou quantidade menor"
+        )
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
+def test_remover_item_restaura_estoque_e_preserva_auditoria():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_a = _criar_produto("A", "Produto A", 12, estoque=10)
+        produto_b = _criar_produto("B", "Produto B", 5, estoque=7)
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_a,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 2,
+                    "preco_unit": 12,
+                },
+                {
+                    "produto_id": produto_b,
+                    "codigo": "B",
+                    "nome": "Produto B",
+                    "quantidade": 1,
+                    "preco_unit": 5,
+                },
+            ],
+            "Pix",
+            data="01/01/2026",
+        )
+        detalhe_inicial = vendas_service.obter_detalhe_venda(periodo_id, 1)
+        line_id = next(
+            item["line_id"]
+            for item in detalhe_inicial["items"]
+            if item["product_id"] == produto_a
+        )
+
+        detalhe = vendas_service.remover_item_venda(
+            periodo_id,
+            1,
+            line_id,
+            responsavel="Ana",
+            observacao="Produto incluido por engano",
+        )
+
+        with database.get_conn() as conn:
+            estoques = {
+                row["codigo"]: row["estoque"]
+                for row in conn.execute(
+                    "SELECT codigo, estoque FROM produtos ORDER BY codigo"
+                ).fetchall()
+            }
+        ajustes = [
+            dict(row) for row in database.listar_movimentacoes_estoque(tipo="AJUSTE")
+        ]
+
+        assert detalhe["status"] == "corrected"
+        assert [item["code"] for item in detalhe["items"]] == ["B"]
+        assert detalhe["totals"] == {"items": 1, "units": 1, "total": 5}
+        assert estoques == {"A": 10, "B": 6}
+        assert ajustes[0]["produto_id"] == produto_a
+        assert ajustes[0]["quantidade"] == 2
+        assert ajustes[0]["origem"] == "CORRECAO_POS_VENDA"
+        assert detalhe["correction_history"][-1]["action"] == "remove_item"
+        assert detalhe["correction_history"][-1]["before"]["line_id"] == line_id
+        assert detalhe["correction_history"][-1]["before"]["quantity"] == 2
+        assert detalhe["correction_history"][-1]["after"] == {
+            "line_id": line_id,
+            "removed": True,
+        }
+        assert detalhe["correction_history"][-1]["responsible"] == "Ana"
+        assert detalhe["correction_history"][-1]["created_at"]
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
+def test_correcao_item_rejeita_quantidade_invalida_venda_inexistente_e_cancelada():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_id = _criar_produto("A", "Produto A", 12, estoque=10)
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_id,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 2,
+                    "preco_unit": 12,
+                }
+            ],
+            "Pix",
+            data="01/01/2026",
+        )
+        line_id = vendas_service.obter_detalhe_venda(periodo_id, 1)["items"][0][
+            "line_id"
+        ]
+
+        operacoes_invalidas = (
+            (
+                lambda: vendas_service.alterar_quantidade_item_venda(
+                    periodo_id, 1, line_id, -1, responsavel="Ana"
+                ),
+                "Quantidade do item deve ser um numero inteiro positivo.",
+            ),
+            (
+                lambda: vendas_service.alterar_quantidade_item_venda(
+                    periodo_id, 99, line_id, 1, responsavel="Ana"
+                ),
+                "Venda nao encontrada.",
+            ),
+            (
+                lambda: vendas_service.remover_item_venda(
+                    periodo_id, 1, line_id, responsavel="Ana"
+                ),
+                "A venda deve manter ao menos um item; use Cancelar venda.",
+            ),
+        )
+        for operacao, mensagem in operacoes_invalidas:
+            try:
+                operacao()
+                raise AssertionError("Correcao invalida deveria ser rejeitada.")
+            except ValueError as exc:
+                assert str(exc) == mensagem
+
+        vendas_service.cancelar_venda(periodo_id, 1, responsavel="Ana")
+        try:
+            vendas_service.alterar_quantidade_item_venda(
+                periodo_id, 1, line_id, 1, responsavel="Ana"
+            )
+            raise AssertionError("Venda cancelada deveria rejeitar correcao de item.")
+        except ValueError as exc:
+            assert str(exc) == "Venda cancelada nao pode receber nova correcao."
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
+def test_falha_na_auditoria_desfaz_correcao_de_item_e_ajuste_de_estoque():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_id = _criar_produto("A", "Produto A", 12, estoque=10)
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_id,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 2,
+                    "preco_unit": 12,
+                }
+            ],
+            "Pix",
+            data="01/01/2026",
+        )
+        line_id = vendas_service.obter_detalhe_venda(periodo_id, 1)["items"][0][
+            "line_id"
+        ]
+        with database.get_conn() as conn:
+            conn.execute(
+                """
+                CREATE TRIGGER impedir_auditoria_item
+                BEFORE INSERT ON vendas_correcoes
+                BEGIN
+                    SELECT RAISE(ABORT, 'falha simulada');
+                END
+                """
+            )
+
+        try:
+            vendas_service.alterar_quantidade_item_venda(
+                periodo_id, 1, line_id, 5, responsavel="Ana"
+            )
+            raise AssertionError("A falha simulada deveria interromper a correcao.")
+        except sqlite3.IntegrityError:
+            pass
+
+        with database.get_conn() as conn:
+            venda = conn.execute(
+                "SELECT quantidade, subtotal, status FROM vendas WHERE id = ?",
+                (line_id,),
+            ).fetchone()
+            estoque = conn.execute(
+                "SELECT estoque FROM produtos WHERE id = ?", (produto_id,)
+            ).fetchone()["estoque"]
+            ajustes = conn.execute(
+                """
+                SELECT COUNT(*) FROM movimentacoes_estoque
+                WHERE origem = 'CORRECAO_POS_VENDA'
+                """
+            ).fetchone()[0]
+
+        assert dict(venda) == {"quantidade": 2, "subtotal": 24, "status": "valid"}
+        assert estoque == 8
+        assert ajustes == 0
+    finally:
+        _limpar_banco_temporario(temp, original)
