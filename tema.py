@@ -5,19 +5,19 @@ from __future__ import annotations
 # Tokens base inspirados na Variante A "Command Center"
 TEMA_CLARO = {
     # Cores de superficie e fundo
-    "bg": "#F6F3EC",
+    "bg": "#F3F5F4",
     "surface": "#FFFFFF",
-    "surface_2": "#F0ECE2",
-    "surface_3": "#FBFAF6",
-    "surface_hover": "#EBE7DC",
+    "surface_2": "#EEF2F0",
+    "surface_3": "#FAFCFB",
+    "surface_hover": "#E4EAE6",
     # Cores de texto
-    "text": "#1D1B18",
-    "text_muted": "#706B62",
+    "text": "#17201C",
+    "text_muted": "#64706A",
     "text_on_primary": "#FFFFFF",
     "text_on_dark": "#F6F4EF",
     # Bordas
-    "border": "#DED7CA",
-    "border_soft": "#EBE5D8",
+    "border": "#D7DEDA",
+    "border_soft": "#E7ECE9",
     # Identidade (Verde / Dourado)
     "primary": "#0F6E56",
     "primary_hover": "#198262",
@@ -33,7 +33,7 @@ TEMA_CLARO = {
     "info_soft": "#E7F0F7",
     "purple_soft": "#F4E8FF",
     "purple_fg": "#6B2A8F",
-    "neutral_soft": "#EAE7DF",
+    "neutral_soft": "#E8ECEA",
     # Foco de teclado
     "focus_ring": "#C9972C",
     "focus_ring_width": 2,
@@ -41,11 +41,11 @@ TEMA_CLARO = {
     "primaria": "#0F6E56",
     "primaria_media": "#198262",
     "primaria_suave": "#E3F4EC",
-    "fundo": "#F6F3EC",
-    "fundo_secundario": "#F0ECE2",
-    "texto": "#1D1B18",
-    "texto_suave": "#706B62",
-    "borda": "#DED7CA",
+    "fundo": "#F3F5F4",
+    "fundo_secundario": "#EEF2F0",
+    "texto": "#17201C",
+    "texto_suave": "#64706A",
+    "borda": "#D7DEDA",
     "perigo": "#A83333",
     "perigo_suave": "#FCE9E9",
     "azul": "#1F638F",
@@ -53,7 +53,7 @@ TEMA_CLARO = {
     "amarelo": "#9B6500",
     "amarelo_suave": "#FFF2D2",
     "roxo_suave": "#F4E8FF",
-    "neutro_suave": "#EAE7DF",
+    "neutro_suave": "#E8ECEA",
 }
 
 TEMA_ESCURO = {
@@ -181,7 +181,6 @@ NOME_TEMA_ATUAL = "claro"
 TEMA_ATUAL = dict(TEMA_CLARO)
 _THEME_LISTENERS = []
 
-
 def obter_tema(nome: str = "claro") -> dict[str, str]:
     return TEMA_ESCURO if nome == "escuro" else TEMA_CLARO
 
@@ -230,29 +229,32 @@ def definir_tema_atual(nome: str) -> dict[str, str]:
     AZUL = TEMA_ATUAL["info"]
     AMARELO = TEMA_ATUAL["warning"]
 
-    STATUS_BG = {
+    STATUS_BG.clear()
+    STATUS_BG.update({
         "CRITICO": TEMA_ATUAL["danger_soft"],
         "ALERTA": TEMA_ATUAL["warning_soft"],
         "MORTO": TEMA_ATUAL["neutral_soft"],
         "OK": TEMA_ATUAL["primary_soft"],
         "INATIVO": TEMA_ATUAL["neutral_soft"],
-    }
+    })
 
-    PGTO_BG = {
+    PGTO_BG.clear()
+    PGTO_BG.update({
         "Debito": TEMA_ATUAL["info_soft"],
         "Credito": TEMA_ATUAL["purple_soft"],
         "Pix": TEMA_ATUAL["primary_soft"],
         "Dinheiro": TEMA_ATUAL["gold_soft"],
         "Mais de uma forma": TEMA_ATUAL["purple_soft"],
-    }
+    })
 
-    PGTO_FG = {
+    PGTO_FG.clear()
+    PGTO_FG.update({
         "Debito": TEMA_ATUAL["info"],
         "Credito": TEMA_ATUAL["purple_fg"],
         "Pix": TEMA_ATUAL["primary"],
         "Dinheiro": TEMA_ATUAL["gold"],
         "Mais de uma forma": TEMA_ATUAL["purple_fg"],
-    }
+    })
 
     for listener in list(_THEME_LISTENERS):
         try:

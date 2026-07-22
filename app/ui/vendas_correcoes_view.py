@@ -25,6 +25,7 @@ from app.ui.components import (
     StatusBadge,
     StyledEntry,
     action_button,
+    bind_escape_to_close,
     confirmar_acao_sensivel,
 )
 from tema import FONTES, TEMA_ATUAL, moeda
@@ -332,6 +333,7 @@ class VendaDetailModal(tk.Toplevel):
         self.configure(bg=TEMA_ATUAL["fundo"])
         self.transient(parent.winfo_toplevel())
         self.grab_set()
+        bind_escape_to_close(self)
 
         self._build_ui()
 

@@ -255,6 +255,7 @@ class VendasCorrecoesUITest(unittest.TestCase):
 
             modal = VendaDetailModal(root, detalhe_mock)
             self.assertEqual(modal._detalhe["identity"]["sale_number"], 10)
+            self.assertTrue(modal.bind("<Escape>"))
             modal.destroy()
         finally:
             root.destroy()

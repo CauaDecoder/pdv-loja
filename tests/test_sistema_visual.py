@@ -36,7 +36,52 @@ class SistemaVisualTest(unittest.TestCase):
 
         tema.definir_tema_atual("claro")
         self.assertEqual(tema.obter_nome_tema_atual(), "claro")
-        self.assertEqual(tema.obter_tema_atual()["bg"], "#F6F3EC")
+        self.assertEqual(tema.obter_tema_atual()["bg"], "#F3F5F4")
+
+    def test_tema_claro_usa_base_neutra_e_tabela_sem_grade(self):
+        """O tema claro evita o bege dominante e as tabelas usam bordas discretas."""
+        self.assertEqual(tema.TEMA_CLARO["bg"], "#F3F5F4")
+        self.assertEqual(tema.TEMA_CLARO["surface"], "#FFFFFF")
+
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            style = components.configure_styles(root, "claro")
+            self.assertEqual(str(style.lookup("Treeview", "borderwidth")), "0")
+            self.assertEqual(style.lookup("Treeview", "bordercolor"), tema.TEMA_CLARO["surface"])
+            self.assertEqual(str(style.lookup("Treeview.Heading", "borderwidth")), "0")
+        finally:
+            root.destroy()
+
+    def test_controles_de_selecao_readonly_sao_legiveis_no_tema_escuro(self):
+        """Comboboxes readonly devem aplicar fundo e texto próprios do tema escuro."""
+        tema.definir_tema_atual("escuro")
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except tk.TclError:
+            tema.definir_tema_atual("claro")
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            style = components.configure_styles(root, "escuro")
+            self.assertEqual(
+                style.lookup("TCombobox", "fieldbackground", ("readonly",)),
+                tema.TEMA_ESCURO["surface_3"],
+            )
+            self.assertEqual(
+                style.lookup("TCombobox", "foreground", ("readonly",)),
+                tema.TEMA_ESCURO["text"],
+            )
+        finally:
+            root.destroy()
+            tema.definir_tema_atual("claro")
 
     def test_instanciacao_componentes_visuais(self):
         """Testa se os componentes visuais sao criados sem erro em um Tcl virtual."""
