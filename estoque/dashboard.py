@@ -6,19 +6,11 @@ import tkinter as tk
 from tkinter import ttk
 
 import database as db
+import tema as theme
 from app.ui.components import Card, EmptyState, PageHeader
 from tema import (
-    AZUL,
-    BORDA,
-    BRANCO,
     ESPACOS,
     FONTES,
-    FUNDO,
-    FUNDO2,
-    MUTED,
-    TEXTO,
-    VERDE_ESC,
-    VERMELHO,
     moeda,
 )
 
@@ -32,9 +24,9 @@ except Exception:  # pragma: no cover - depende do ambiente grafico local
 
 def criar_figura(titulo: str, largura=4, altura=3):
     figura = Figure(figsize=(largura, altura), dpi=92)
-    figura.patch.set_facecolor(BRANCO)
+    figura.patch.set_facecolor(theme.BRANCO)
     ax = figura.add_subplot(111)
-    ax.set_title(titulo, fontsize=10, fontweight="bold", color=TEXTO, pad=10)
+    ax.set_title(titulo, fontsize=10, fontweight="bold", color=theme.TEXTO, pad=10)
     return figura
 
 
@@ -48,7 +40,7 @@ def renderizar_grafico(frame, figure):
 
 class DashboardEstoque(tk.Frame):
     def __init__(self, parent):
-        super().__init__(parent, bg=FUNDO)
+        super().__init__(parent, bg=theme.FUNDO)
         self._cards: dict[str, tk.Label] = {}
         self._graficos_frame: tk.Frame | None = None
         self._acoes_tree: ttk.Treeview | None = None
@@ -62,42 +54,42 @@ class DashboardEstoque(tk.Frame):
             fill="x", padx=ESPACOS["lg"], pady=ESPACOS["lg"]
         )
 
-        self._canvas = tk.Canvas(self, bg=FUNDO, highlightthickness=0)
+        self._canvas = tk.Canvas(self, bg=theme.FUNDO, highlightthickness=0)
         scroll = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
         self._canvas.configure(yscrollcommand=scroll.set)
         self._canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
 
-        self._conteudo = tk.Frame(self._canvas, bg=FUNDO, padx=ESPACOS["lg"], pady=0)
+        self._conteudo = tk.Frame(self._canvas, bg=theme.FUNDO, padx=ESPACOS["lg"], pady=0)
         self._window = self._canvas.create_window((0, 0), window=self._conteudo, anchor="nw")
         self._conteudo.bind("<Configure>", lambda _e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
         self._canvas.bind("<Configure>", lambda e: self._canvas.itemconfigure(self._window, width=e.width))
         self._bind_mousewheel_recursivo(self._canvas)
 
-        self._cards_frame = tk.Frame(self._conteudo, bg=FUNDO)
+        self._cards_frame = tk.Frame(self._conteudo, bg=theme.FUNDO)
         self._cards_frame.pack(fill="x", pady=(0, ESPACOS["md"]))
         for idx, (chave, titulo, subtitulo, cor) in enumerate(
             (
-                ("skus_ativos", "SKUs ativos", "Produtos ativos cadastrados", VERDE_ESC),
-                ("produtos_criticos", "Criticos", "Estoque no minimo ou abaixo", VERMELHO),
-                ("produtos_alerta", "Em alerta", "Abaixo do ponto de pedido", AZUL),
-                ("produtos_sem_giro", "Sem giro", "Sem movimento recente", MUTED),
-                ("valor_total_custo", "Valor a custo", "Custo estimado do estoque", VERDE_ESC),
-                ("valor_total_venda", "Valor a venda", "Potencial bruto de venda", AZUL),
-                ("sem_custo", "Sem custo", "Produtos sem custo cadastrado", VERMELHO),
-                ("sem_estoque_minimo", "Sem minimo", "Minimo nao configurado", MUTED),
+                ("skus_ativos", "SKUs ativos", "Produtos ativos cadastrados", theme.VERDE_ESC),
+                ("produtos_criticos", "Criticos", "Estoque no minimo ou abaixo", theme.VERMELHO),
+                ("produtos_alerta", "Em alerta", "Abaixo do ponto de pedido", theme.AZUL),
+                ("produtos_sem_giro", "Sem giro", "Sem movimento recente", theme.MUTED),
+                ("valor_total_custo", "Valor a custo", "Custo estimado do estoque", theme.VERDE_ESC),
+                ("valor_total_venda", "Valor a venda", "Potencial bruto de venda", theme.AZUL),
+                ("sem_custo", "Sem custo", "Produtos sem custo cadastrado", theme.VERMELHO),
+                ("sem_estoque_minimo", "Sem minimo", "Minimo nao configurado", theme.MUTED),
             )
         ):
             self._criar_card(self._cards_frame, chave, titulo, subtitulo, cor, idx)
 
-        self._graficos_frame = tk.Frame(self._conteudo, bg=FUNDO)
+        self._graficos_frame = tk.Frame(self._conteudo, bg=theme.FUNDO)
         self._graficos_frame.pack(fill="both", expand=True)
 
         tk.Label(
             self._conteudo,
             text="Produtos que exigem acao",
-            bg=FUNDO,
-            fg=TEXTO,
+            bg=theme.FUNDO,
+            fg=theme.TEXTO,
             font=FONTES["secao"],
         ).pack(anchor="w", pady=(ESPACOS["md"], 6))
         colunas = ("codigo", "produto", "status", "estoque", "minimo", "valor")
@@ -118,15 +110,15 @@ class DashboardEstoque(tk.Frame):
         self._bind_mousewheel_recursivo(self._conteudo)
 
     def _criar_card(self, parent, chave: str, titulo: str, subtitulo: str, cor: str, idx: int):
-        card = tk.Frame(parent, bg=BRANCO, padx=14, pady=12, highlightbackground=BORDA, highlightthickness=1)
+        card = tk.Frame(parent, bg=theme.BRANCO, padx=14, pady=12, highlightbackground=theme.BORDA, highlightthickness=1)
         card.grid(row=idx // 4, column=idx % 4, sticky="nsew", padx=(0, ESPACOS["sm"]), pady=(0, ESPACOS["sm"]))
         parent.columnconfigure(idx % 4, weight=1)
         faixa = tk.Frame(card, bg=cor, height=4)
         faixa.pack(fill="x", pady=(0, ESPACOS["sm"]))
-        tk.Label(card, text=titulo, bg=BRANCO, fg=MUTED, font=FONTES["label_sm"]).pack(anchor="w")
-        valor = tk.Label(card, text="0", bg=BRANCO, fg=cor, font=FONTES["numero_card"])
+        tk.Label(card, text=titulo, bg=theme.BRANCO, fg=theme.MUTED, font=FONTES["label_sm"]).pack(anchor="w")
+        valor = tk.Label(card, text="0", bg=theme.BRANCO, fg=cor, font=FONTES["numero_card"])
         valor.pack(anchor="w", pady=(6, 2))
-        tk.Label(card, text=subtitulo, bg=BRANCO, fg=MUTED, font=FONTES["corpo"], wraplength=180, justify="left").pack(anchor="w")
+        tk.Label(card, text=subtitulo, bg=theme.BRANCO, fg=theme.MUTED, font=FONTES["corpo"], wraplength=180, justify="left").pack(anchor="w")
         self._cards[chave] = valor
 
     def atualizar(self):
@@ -169,7 +161,7 @@ class DashboardEstoque(tk.Frame):
             ),
         ]
         for linha in linhas:
-            linha_frame = tk.Frame(self._graficos_frame, bg=FUNDO)
+            linha_frame = tk.Frame(self._graficos_frame, bg=theme.FUNDO)
             linha_frame.pack(fill="x")
             for titulo, funcao in linha:
                 card, figura = self._card_grafico(linha_frame, titulo)
@@ -184,7 +176,7 @@ class DashboardEstoque(tk.Frame):
         ax = figura.axes[0]
         labels = [d["status"] for d in dados]
         valores = [d["total"] for d in dados]
-        ax.barh(labels, valores, color=[VERMELHO, AZUL, VERDE_ESC, MUTED, FUNDO2])
+        ax.barh(labels, valores, color=[theme.VERMELHO, theme.AZUL, theme.VERDE_ESC, theme.MUTED, theme.FUNDO2])
         ax.tick_params(labelsize=8)
 
     def _grafico_abc(self, figura):
@@ -198,28 +190,28 @@ class DashboardEstoque(tk.Frame):
     def _grafico_categorias(self, figura):
         dados = list(reversed(db.dashboard_valor_por_categoria()))
         ax = figura.axes[0]
-        ax.barh([d["categoria"][:28] for d in dados], [d["valor"] for d in dados], color=AZUL)
+        ax.barh([d["categoria"][:28] for d in dados], [d["valor"] for d in dados], color=theme.AZUL)
         ax.tick_params(labelsize=8)
 
     def _grafico_valor_parado(self, figura):
         dados = list(reversed(db.dashboard_top_valor_parado()))
         ax = figura.axes[0]
-        ax.barh([d["nome"][:28] for d in dados], [d["valor"] for d in dados], color=VERDE_ESC)
+        ax.barh([d["nome"][:28] for d in dados], [d["valor"] for d in dados], color=theme.VERDE_ESC)
         ax.tick_params(labelsize=8)
 
     def _grafico_vendidos(self, figura):
         dados = list(reversed(db.dashboard_top_vendidos()))
         ax = figura.axes[0]
-        ax.barh([d["nome"][:28] for d in dados], [d["quantidade"] for d in dados], color=AZUL)
+        ax.barh([d["nome"][:28] for d in dados], [d["quantidade"] for d in dados], color=theme.AZUL)
         ax.tick_params(labelsize=8)
 
     def _grafico_movimentos(self, figura):
         dados = db.dashboard_movimentacoes_periodo()
         ax = figura.axes[0]
         datas = [d["data_iso"][5:] for d in dados]
-        ax.plot(datas, [d["entradas"] or 0 for d in dados], label="Entradas", color=VERDE_ESC)
-        ax.plot(datas, [d["vendas"] or 0 for d in dados], label="Vendas", color=AZUL)
-        ax.plot(datas, [d["perdas"] or 0 for d in dados], label="Perdas", color=VERMELHO)
+        ax.plot(datas, [d["entradas"] or 0 for d in dados], label="Entradas", color=theme.VERDE_ESC)
+        ax.plot(datas, [d["vendas"] or 0 for d in dados], label="Vendas", color=theme.AZUL)
+        ax.plot(datas, [d["perdas"] or 0 for d in dados], label="Perdas", color=theme.VERMELHO)
         ax.legend(fontsize=7)
         ax.tick_params(labelsize=7, rotation=45)
 

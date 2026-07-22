@@ -7,26 +7,8 @@ from tkinter import ttk
 from typing import Callable, Sequence
 
 from tema import (
-    AMARELO,
-    AZUL,
-    BORDA,
-    BORDER_COLOR,
-    BORDER_LIGHT,
-    BRANCO,
     CARD_PADDING,
-    COLORS,
-    ESPACOS,
     FONTES,
-    FUNDO,
-    FUNDO2,
-    MUTED,
-    PGTO_BG,
-    PGTO_FG,
-    STATUS_BG,
-    TEXTO,
-    VERDE_CLAR,
-    VERDE_ESC,
-    VERMELHO,
     obter_nome_tema_atual,
     obter_tema_atual,
 )
@@ -113,6 +95,148 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
     return style
 
 
+def bind_escape_to_close(dialog: tk.Toplevel) -> None:
+    """Padroniza o cancelamento por Escape em modais Tkinter."""
+    dialog.bind("<Escape>", lambda _event: dialog.destroy())
+
+
+_BACKGROUND_COLOR_KEYS = (
+    "bg",
+    "surface",
+    "surface_2",
+    "surface_3",
+    "surface_hover",
+    "border",
+    "border_soft",
+    "primary",
+    "primary_hover",
+    "primary_soft",
+    "gold",
+    "gold_soft",
+    "danger",
+    "danger_soft",
+    "warning",
+    "warning_soft",
+    "info",
+    "info_soft",
+    "purple_soft",
+    "neutral_soft",
+    "focus_ring",
+)
+_FOREGROUND_COLOR_KEYS = (
+    "text",
+    "text_muted",
+    "text_on_primary",
+    "text_on_dark",
+    "primary",
+    "primary_hover",
+    "gold",
+    "danger",
+    "warning",
+    "info",
+    "purple_fg",
+    "border",
+)
+_FOREGROUND_OPTIONS = {
+    "foreground",
+    "activeforeground",
+    "disabledforeground",
+    "insertbackground",
+    "selectforeground",
+}
+_COLOR_OPTIONS = _FOREGROUND_OPTIONS | {
+    "background",
+    "activebackground",
+    "highlightbackground",
+    "highlightcolor",
+    "readonlybackground",
+    "selectbackground",
+    "selectcolor",
+    "troughcolor",
+}
+
+
+def _theme_color(
+    value: str,
+    option: str,
+    previous_theme: dict[str, str],
+    current_theme: dict[str, str],
+) -> str:
+    """Traduz uma cor do tema anterior preservando o papel semantico."""
+    keys = _FOREGROUND_COLOR_KEYS if option in _FOREGROUND_OPTIONS else _BACKGROUND_COLOR_KEYS
+    normalized = str(value).lower()
+    for key in keys:
+        if str(previous_theme.get(key, "")).lower() == normalized:
+            return current_theme.get(key, value)
+    return value
+
+
+def apply_theme_to_widget_tree(
+    widget: tk.Misc,
+    previous_theme: dict[str, str],
+) -> None:
+    """Reaplica tokens de tema aos widgets ja montados em todas as telas."""
+    current_theme = obter_tema_atual()
+    updates = {}
+    try:
+        configuration = widget.configure()
+    except tk.TclError:
+        configuration = {}
+
+    for option in _COLOR_OPTIONS.intersection(configuration):
+        try:
+            current_value = widget.cget(option)
+            translated = _theme_color(current_value, option, previous_theme, current_theme)
+            if translated != current_value:
+                updates[option] = translated
+        except tk.TclError:
+            continue
+    if updates:
+        try:
+            widget.configure(**updates)
+        except tk.TclError:
+            pass
+
+    if isinstance(widget, tk.Canvas):
+        for item_id in widget.find_all():
+            item_updates = {}
+            for option in ("fill", "outline", "activefill", "activeoutline"):
+                try:
+                    current_value = widget.itemcget(item_id, option)
+                except tk.TclError:
+                    continue
+                role = "foreground" if "fill" in option else "background"
+                translated = _theme_color(current_value, role, previous_theme, current_theme)
+                if translated != current_value:
+                    item_updates[option] = translated
+            if item_updates:
+                try:
+                    widget.itemconfigure(item_id, **item_updates)
+                except tk.TclError:
+                    pass
+
+    if isinstance(widget, ttk.Treeview):
+        try:
+            tags = widget.tk.splitlist(widget.tk.call(widget._w, "tag", "names"))
+        except tk.TclError:
+            tags = ()
+        for tag in tags:
+            tag_updates = {}
+            for option in ("background", "foreground"):
+                try:
+                    current_value = widget.tag_configure(tag, option)
+                except tk.TclError:
+                    continue
+                translated = _theme_color(current_value, option, previous_theme, current_theme)
+                if translated != current_value:
+                    tag_updates[option] = translated
+            if tag_updates:
+                widget.tag_configure(tag, **tag_updates)
+
+    for child in widget.winfo_children():
+        apply_theme_to_widget_tree(child, previous_theme)
+
+
 class FocusHelper:
     """Helper para aplicar anel de foco evidente via teclado (Variante A - Dourado)."""
 
@@ -127,6 +251,19 @@ class FocusHelper:
         ring = focus_color or tema["focus_ring"]
         norm_b = normal_border or tema["border"]
 
+        def _theme_key(color: str) -> str | None:
+            normalized = str(color).lower()
+            return next(
+                (key for key, value in tema.items() if str(value).lower() == normalized),
+                None,
+            )
+
+        ring_key = _theme_key(ring)
+        normal_key = _theme_key(norm_b)
+
+        def _current_color(key: str | None, fallback: str) -> str:
+            return obter_tema_atual().get(key, fallback) if key else fallback
+
         widget.config(
             highlightthickness=tema["focus_ring_width"],
             highlightbackground=norm_b,
@@ -135,13 +272,16 @@ class FocusHelper:
 
         def _on_focus_in(_e):
             try:
-                widget.config(highlightbackground=ring)
+                widget.config(
+                    highlightbackground=_current_color(ring_key, ring),
+                    highlightcolor=_current_color(ring_key, ring),
+                )
             except tk.TclError:
                 pass
 
         def _on_focus_out(_e):
             try:
-                widget.config(highlightbackground=norm_b)
+                widget.config(highlightbackground=_current_color(normal_key, norm_b))
             except tk.TclError:
                 pass
 

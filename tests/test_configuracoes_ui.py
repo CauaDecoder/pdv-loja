@@ -64,6 +64,60 @@ class ConfiguracoesUITest(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_tema_escuro_e_propagado_a_todas_as_telas_principais(self):
+        """A troca de tema deve alcançar o conteúdo já montado de cada aba."""
+        try:
+            root = CaixaApp()
+            root.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            with database.get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO produtos (codigo, nome, preco, estoque)
+                    VALUES ('TEMA', 'Produto Tema', 10, 5)
+                    """
+                )
+            fundos_claros = {
+                tema.TEMA_CLARO["bg"],
+                tema.TEMA_CLARO["surface"],
+                tema.TEMA_CLARO["surface_2"],
+                tema.TEMA_CLARO["surface_3"],
+            }
+
+            root._alternar_tema("escuro")
+
+            produto = dict(database.buscar_produto("TEMA")[0])
+            root._adicionar_produto(produto)
+            root._renderizar_carrinho()
+
+            for aba in (
+                root._aba_venda,
+                root._aba_vendas_correcoes,
+                root._aba_estoque,
+                root._aba_importacao,
+                root._aba_relatorios,
+                root._aba_configuracoes,
+            ):
+                widgets = [aba]
+                while widgets:
+                    widget = widgets.pop()
+                    widgets.extend(widget.winfo_children())
+                    try:
+                        fundo = widget.cget("background")
+                    except tk.TclError:
+                        continue
+                    self.assertNotIn(
+                        fundo,
+                        fundos_claros,
+                        f"{widget} permaneceu com fundo do tema claro",
+                    )
+        finally:
+            root.destroy()
+
     def test_ausencia_de_backup_no_rodape_da_venda(self):
         """Valida que os botoes de backup foram removidos do rodape da tela de venda."""
         try:

@@ -181,7 +181,6 @@ NOME_TEMA_ATUAL = "claro"
 TEMA_ATUAL = dict(TEMA_CLARO)
 _THEME_LISTENERS = []
 
-
 def obter_tema(nome: str = "claro") -> dict[str, str]:
     return TEMA_ESCURO if nome == "escuro" else TEMA_CLARO
 
@@ -230,29 +229,32 @@ def definir_tema_atual(nome: str) -> dict[str, str]:
     AZUL = TEMA_ATUAL["info"]
     AMARELO = TEMA_ATUAL["warning"]
 
-    STATUS_BG = {
+    STATUS_BG.clear()
+    STATUS_BG.update({
         "CRITICO": TEMA_ATUAL["danger_soft"],
         "ALERTA": TEMA_ATUAL["warning_soft"],
         "MORTO": TEMA_ATUAL["neutral_soft"],
         "OK": TEMA_ATUAL["primary_soft"],
         "INATIVO": TEMA_ATUAL["neutral_soft"],
-    }
+    })
 
-    PGTO_BG = {
+    PGTO_BG.clear()
+    PGTO_BG.update({
         "Debito": TEMA_ATUAL["info_soft"],
         "Credito": TEMA_ATUAL["purple_soft"],
         "Pix": TEMA_ATUAL["primary_soft"],
         "Dinheiro": TEMA_ATUAL["gold_soft"],
         "Mais de uma forma": TEMA_ATUAL["purple_soft"],
-    }
+    })
 
-    PGTO_FG = {
+    PGTO_FG.clear()
+    PGTO_FG.update({
         "Debito": TEMA_ATUAL["info"],
         "Credito": TEMA_ATUAL["purple_fg"],
         "Pix": TEMA_ATUAL["primary"],
         "Dinheiro": TEMA_ATUAL["gold"],
         "Mais de uma forma": TEMA_ATUAL["purple_fg"],
-    }
+    })
 
     for listener in list(_THEME_LISTENERS):
         try:

@@ -101,6 +101,36 @@ class VendaVarianteAUITest(unittest.TestCase):
         finally:
             app.destroy()
 
+    def test_fluxo_comum_expoe_atalhos_para_pagamento_e_finalizacao(self):
+        """O operador chega ao pagamento e finaliza sem depender do mouse."""
+        try:
+            app = CaixaApp()
+            app.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            app._var_busca.set("P1")
+            app._on_enter_busca()
+
+            self.assertTrue(app.bind_all("<F4>"))
+            self.assertTrue(app.bind_all("<F8>"))
+
+            app._focar_pagamento()
+            self.assertEqual(app._btns_pgto["Debito"].cget("takefocus"), 1)
+
+            app._btns_pgto["Pix"].invoke()
+            self.assertEqual(app._pagamento, "Pix")
+
+            venda_atual = app._num_venda
+            app._finalizar_venda_por_atalho()
+
+            self.assertEqual(app._num_venda, venda_atual + 1)
+            self.assertEqual(app._carrinho, [])
+        finally:
+            app.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

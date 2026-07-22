@@ -5,9 +5,10 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import tema as theme
 from app.services.importacao_service import MODOS
-from app.ui.components import Card, PageHeader, configure_styles
-from tema import BRANCO, FUNDO, FUNDO2, MUTED, TEXTO, VERDE_ESC, VERMELHO, moeda
+from app.ui.components import Card, PageHeader, bind_escape_to_close, configure_styles
+from tema import moeda
 
 
 def _valor(valor) -> str:
@@ -19,9 +20,10 @@ def confirmar_importacao(parent, previa: dict) -> str | None:
     dialog.title("Conferencia da importacao")
     dialog.geometry("760x680")
     dialog.minsize(680, 560)
-    dialog.configure(bg=FUNDO)
+    dialog.configure(bg=theme.FUNDO)
     dialog.transient(parent)
     dialog.grab_set()
+    bind_escape_to_close(dialog)
     configure_styles(dialog)
     resultado = {"modo": None}
 
@@ -29,7 +31,7 @@ def confirmar_importacao(parent, previa: dict) -> str | None:
 
     card = Card(dialog, padding=0)
     card.pack(fill="both", expand=True, padx=18)
-    texto = tk.Text(card, bg=BRANCO, fg=TEXTO, relief="flat", padx=14, pady=12, wrap="word", borderwidth=0)
+    texto = tk.Text(card, bg=theme.BRANCO, fg=theme.TEXTO, relief="flat", padx=14, pady=12, wrap="word", borderwidth=0)
     texto.pack(fill="both", expand=True)
     diferenca = previa.get("diferenca_custo")
     linhas = [
@@ -65,9 +67,9 @@ def confirmar_importacao(parent, previa: dict) -> str | None:
     texto.insert("1.0", "\n".join(linhas))
     texto.configure(state="disabled")
 
-    rodape = tk.Frame(dialog, bg=FUNDO, padx=18, pady=14)
+    rodape = tk.Frame(dialog, bg=theme.FUNDO, padx=18, pady=14)
     rodape.pack(fill="x")
-    tk.Label(rodape, text="Modo de estoque", bg=FUNDO, fg=TEXTO, font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w")
+    tk.Label(rodape, text="Modo de estoque", bg=theme.FUNDO, fg=theme.TEXTO, font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w")
     modo_rotulo = tk.StringVar(value=next(iter(MODOS)))
     ttk.Combobox(rodape, textvariable=modo_rotulo, values=list(MODOS), state="readonly", width=32).grid(row=0, column=1, sticky="w", padx=8)
     rodape.grid_columnconfigure(2, weight=1)
@@ -83,10 +85,10 @@ def confirmar_importacao(parent, previa: dict) -> str | None:
         resultado["modo"] = MODOS[modo_rotulo.get()]
         dialog.destroy()
 
-    tk.Button(rodape, text="Cancelar", bg=BRANCO, fg=MUTED, relief="flat", command=dialog.destroy, padx=14, pady=8).grid(row=0, column=4, sticky="e", padx=(8, 0))
-    tk.Button(rodape, text="Importar", bg=VERDE_ESC, fg=BRANCO, relief="flat", command=confirmar, padx=16, pady=8).grid(row=0, column=5, sticky="e")
+    tk.Button(rodape, text="Cancelar", bg=theme.BRANCO, fg=theme.MUTED, relief="flat", command=dialog.destroy, padx=14, pady=8).grid(row=0, column=4, sticky="e", padx=(8, 0))
+    tk.Button(rodape, text="Importar", bg=theme.VERDE_ESC, fg=theme.BRANCO, relief="flat", command=confirmar, padx=16, pady=8).grid(row=0, column=5, sticky="e")
     if previa.get("alerta_diferenca_custo"):
-        tk.Label(rodape, text="Diferença financeira acima de R$ 0,05", bg=FUNDO, fg=VERMELHO).grid(row=1, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        tk.Label(rodape, text="Diferença financeira acima de R$ 0,05", bg=theme.FUNDO, fg=theme.VERMELHO).grid(row=1, column=0, columnspan=6, sticky="w", pady=(8, 0))
 
     parent.wait_window(dialog)
     return resultado["modo"]
