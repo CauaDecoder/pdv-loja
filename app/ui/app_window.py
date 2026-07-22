@@ -39,6 +39,7 @@ from app.ui.components import (
     configure_styles,
 )
 from app.ui.importacao_dialog import confirmar_importacao
+from app.ui.vendas_correcoes_view import VendasCorrecoesView
 from estoque.dashboard import DashboardEstoque
 from estoque.painel import PainelEstoque
 from tema import (
@@ -542,61 +543,12 @@ class CaixaApp(tk.Tk):
             tk.Button(acoes_footer, text=label, bg=BRANCO, fg=fg, font=("Segoe UI", 9), relief="flat", cursor="hand2", padx=10, pady=8, command=callback).pack(side="right", padx=(0, 4))
 
     def _build_vendas_correcoes_tab(self):
-        """Monta a aba de Vendas e correções (evoluída de Últimas vendas)."""
-        pad = tk.Frame(self._aba_vendas_correcoes, bg=TEMA_ATUAL["fundo"], padx=18, pady=16)
-        pad.pack(fill="both", expand=True)
-
-        PageHeader(
-            pad,
-            "Vendas e correções",
-            "Consulte vendas finalizadas e realize correções pós-venda ou cancelamentos.",
-            "Atualizar",
-            self._atualizar_historico,
-        ).pack(fill="x", pady=(0, 12))
-
-        card = Card(pad, padding=0)
-        card.pack(fill="both", expand=True)
-
-        colunas = ("venda", "hora", "total", "pagamento", "itens", "responsavel")
-        titulos = {
-            "venda": "Venda",
-            "hora": "Horário",
-            "total": "Total",
-            "pagamento": "Pagamento",
-            "itens": "Itens",
-            "responsavel": "Responsável",
-        }
-        larguras = {"venda": 90, "hora": 90, "total": 120, "pagamento": 240, "itens": 100, "responsavel": 180}
-        self._historico_tree = DataTable(card, colunas, titulos, larguras, height=14)
-        self._historico_tree.column("pagamento", anchor="w")
-        self._historico_tree.column("responsavel", anchor="w")
-        self._historico_tree.grid(row=0, column=0, sticky="nsew")
-
-        scroll_y = ttk.Scrollbar(card, orient="vertical", command=self._historico_tree.yview)
-        scroll_x = ttk.Scrollbar(card, orient="horizontal", command=self._historico_tree.xview)
-        self._historico_tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
-        scroll_y.grid(row=0, column=1, sticky="ns")
-        scroll_x.grid(row=1, column=0, sticky="ew")
-        self._historico_tree.bind("<Double-1>", lambda _event: self._editar_venda_selecionada())
-        card.columnconfigure(0, weight=1)
-        card.rowconfigure(0, weight=1)
-
-        acoes = tk.Frame(pad, bg=TEMA_ATUAL["fundo"])
-        acoes.pack(fill="x", pady=(10, 0))
-        action_button(
-            acoes,
-            text="Editar / Corrigir venda",
-            bg=TEMA_ATUAL["primaria"],
-            fg="#FFFFFF",
-            command=self._editar_venda_selecionada,
-        ).pack(side="right")
-        action_button(
-            acoes,
-            text="Atualizar",
-            bg=TEMA_ATUAL["surface"],
-            fg=TEMA_ATUAL["primaria"],
-            command=self._atualizar_historico,
-        ).pack(side="right", padx=(0, 8))
+        """Monta a aba de Vendas e correções (evoluída de Últimas vendas para Issue #15)."""
+        self._vendas_correcoes_view = VendasCorrecoesView(
+            self._aba_vendas_correcoes,
+            on_sale_updated=self._atualizar_painel_estoque,
+        )
+        self._vendas_correcoes_view.pack(fill="both", expand=True)
 
     def _build_history_tab(self):
         """Compatibilidade para montagem do histórico de vendas."""
@@ -1672,32 +1624,9 @@ class CaixaApp(tk.Tk):
     # Historico e edicao de vendas
     # ------------------------------------------------------------------
     def _atualizar_historico(self):
-        """Recarrega a grade com as ultimas vendas do periodo atual."""
-        if not self._historico_tree or not self._periodo_id:
-            return
-        for item in self._historico_tree.get_children():
-            self._historico_tree.delete(item)
-        for venda in db.ultimas_vendas_periodo(self._periodo_id):
-            detalhe = (venda["pagamento_detalhe"] or "").strip()
-            if detalhe:
-                pagamento = f"{venda['pagamento']} | {detalhe}"
-            elif venda["pagamento"] == "Dinheiro" and venda["valor_recebido"] is not None:
-                pagamento = f"Dinheiro | Recebido {moeda(venda['valor_recebido'])} | Troco {moeda(venda['troco'] or 0)}"
-            else:
-                pagamento = venda["pagamento"]
-            self._historico_tree.insert(
-                "",
-                "end",
-                iid=str(venda["num_venda"]),
-                values=(
-                    f"#{venda['num_venda']:03d}",
-                    venda["hora"],
-                    moeda(venda["total"] or 0),
-                    pagamento,
-                    f"{venda['unidades'] or 0} un.",
-                    venda["responsavel"] or "",
-                ),
-            )
+        """Recarrega a grade com as vendas e correções do período atual."""
+        if hasattr(self, "_vendas_correcoes_view"):
+            self._vendas_correcoes_view.atualizar()
 
     def _atualizar_painel_estoque(self):
         """Sincroniza a aba de estoque apos vendas ou importacoes."""
