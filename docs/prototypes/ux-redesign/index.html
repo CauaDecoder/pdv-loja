@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Caixa Basilica - UX Redesign Prototype</title>
+  <style>
+    /*
+      PROTOTYPE - throwaway UI prototype.
+      Three variants of the PDV redesign, switchable via ?variant=, on a static prototype page.
+    */
+    :root {
+      --bg: #f6f3ec;
+      --surface: #ffffff;
+      --surface-2: #f0ece2;
+      --surface-3: #fbfaf6;
+      --text: #1d1b18;
+      --muted: #706b62;
+      --border: #ded7ca;
+      --soft-border: #ebe5d8;
+      --primary: #0f6e56;
+      --primary-2: #198262;
+      --primary-soft: #e3f4ec;
+      --gold: #c9972c;
+      --gold-soft: #f8ecd0;
+      --danger: #a83333;
+      --danger-soft: #fce9e9;
+      --warning: #9b6500;
+      --warning-soft: #fff2d2;
+      --info: #1f638f;
+      --info-soft: #e7f0f7;
+      --shadow: 0 18px 48px rgba(39, 31, 20, .12);
+      --shadow-soft: 0 8px 24px rgba(39, 31, 20, .08);
+      --radius: 8px;
+      font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    [data-theme="dark"] {
+      --bg: #121416;
+      --surface: #1d2224;
+      --surface-2: #252b2e;
+      --surface-3: #171a1c;
+      --text: #f5f2ea;
+      --muted: #adb2ad;
+      --border: #373f40;
+      --soft-border: #2c3335;
+      --primary: #4bc096;
+      --primary-2: #66d0a9;
+      --primary-soft: #17372d;
+      --gold: #ddb04b;
+      --gold-soft: #3b3017;
+      --danger: #f06f6f;
+      --danger-soft: #3d2324;
+      --warning: #e1ad4a;
+      --warning-soft: #3c3018;
+      --info: #7bb8e8;
+      --info-soft: #183040;
+      --shadow: 0 18px 48px rgba(0, 0, 0, .38);
+      --shadow-soft: 0 8px 24px rgba(0, 0, 0, .25);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      min-width: 1040px;
+    }
+    button, input, select { font: inherit; }
+    button {
+      border: 0;
+      cursor: pointer;
+      border-radius: 7px;
+      background: var(--surface-2);
+      color: var(--text);
+      padding: 10px 14px;
+      font-weight: 700;
+    }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--gold) 70%, transparent);
+      outline-offset: 2px;
+    }
+    .primary {
+      background: var(--primary);
+      color: #fff;
+    }
+    .danger {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+    .ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+    }
+    .topbar {
+      background: #171614;
+      color: #f7f2e7;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 22px;
+      border-bottom: 3px solid var(--gold);
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    .brand span, .clock span { color: #c9c0b0; font-size: 13px; }
+    .clock { text-align: right; display: grid; gap: 4px; }
+    .clock strong { font-size: 17px; }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 12px 18px 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .tab {
+      padding: 12px 16px;
+      border-radius: 8px 8px 0 0;
+      background: var(--surface-2);
+      color: var(--muted);
+      border: 1px solid transparent;
+      border-bottom: 0;
+    }
+    .tab.active {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--border);
+      box-shadow: 0 -1px 0 var(--surface) inset;
+    }
+    .prototype-note {
+      position: fixed;
+      top: 92px;
+      right: 18px;
+      z-index: 10;
+      background: var(--warning-soft);
+      color: var(--warning);
+      border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent);
+      padding: 8px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      box-shadow: var(--shadow-soft);
+    }
+    .content { padding: 18px; padding-bottom: 96px; }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--soft-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-soft);
+    }
+    .section-title { margin: 0 0 4px; font-size: 16px; }
+    .subtle { color: var(--muted); font-size: 13px; }
+    .kbd {
+      color: var(--muted);
+      border: 1px solid var(--border);
+      background: var(--surface-3);
+      border-radius: 5px;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 8px;
+      font-weight: 800;
+      font-size: 12px;
+      background: var(--surface-2);
+      color: var(--muted);
+    }
+    .pill.good { background: var(--primary-soft); color: var(--primary); }
+    .pill.warn { background: var(--warning-soft); color: var(--warning); }
+    .pill.bad { background: var(--danger-soft); color: var(--danger); }
+    .pill.info { background: var(--info-soft); color: var(--info); }
+    .search {
+      display: grid;
+      gap: 8px;
+    }
+    .search input {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: var(--surface-3);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 16px 16px;
+      font-size: 18px;
+      font-weight: 650;
+    }
+    .cart-item, .sale-row, .stock-row {
+      display: grid;
+      align-items: center;
+      gap: 10px;
+      padding: 12px;
+      border-bottom: 1px solid var(--soft-border);
+    }
+    .cart-item:last-child, .sale-row:last-child, .stock-row:last-child { border-bottom: 0; }
+    .item-name { font-weight: 800; }
+    .money { font-weight: 900; font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); }
+    .total {
+      font-size: 36px;
+      font-weight: 950;
+      letter-spacing: 0;
+      color: var(--primary);
+    }
+    .pay-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .pay-option {
+      border: 1px solid var(--border);
+      background: var(--surface-3);
+      padding: 13px;
+      text-align: left;
+    }
+    .pay-option.active {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+    .table-head {
+      display: grid;
+      gap: 10px;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 900;
+      border-bottom: 1px solid var(--border);
+      text-transform: uppercase;
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, .42);
+      z-index: 30;
+      padding: 24px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      width: min(860px, 92vw);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .modal header, .modal footer {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--soft-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .modal footer {
+      border-top: 1px solid var(--soft-border);
+      border-bottom: 0;
+      justify-content: flex-end;
+      background: var(--surface-3);
+    }
+    .modal-body { padding: 18px; display: grid; gap: 14px; }
+    .switcher {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border-radius: 999px;
+      background: #111;
+      color: #fff;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, .3);
+    }
+    .switcher button {
+      width: 38px;
+      height: 38px;
+      border-radius: 999px;
+      padding: 0;
+      background: #2d2d2d;
+      color: #fff;
+    }
+    .switcher-label {
+      min-width: 220px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .theme-toggle {
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+    .theme-toggle button.active { background: var(--primary); color: #fff; }
+
+    .variant-a {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 16px;
+    }
+    .variant-a .left-stack, .variant-a .right-stack { display: grid; gap: 14px; align-content: start; }
+    .command-search { padding: 16px; }
+    .variant-a .cart-item { grid-template-columns: minmax(220px, 1fr) 82px 96px 84px; }
+    .variant-a .sales-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; }
+
+    .variant-b {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr) 310px;
+      gap: 12px;
+    }
+    .variant-b .rail, .variant-b .receipt, .variant-b .operator { padding: 14px; }
+    .variant-b .cart-item { grid-template-columns: 32px minmax(220px, 1fr) 70px 92px; padding: 9px 10px; }
+    .variant-b .search input { padding: 12px; font-size: 16px; }
+    .variant-b .total { font-size: 30px; }
+    .quick-list { display: grid; gap: 8px; margin-top: 12px; }
+    .quick-card { padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-3); }
+
+    .variant-c {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 14px;
+    }
+    .variant-c .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 42%);
+      gap: 14px;
+    }
+    .variant-c .stepper {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      padding: 12px;
+    }
+    .step {
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface-3);
+      font-weight: 850;
+      color: var(--muted);
+    }
+    .step.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
+    .variant-c .cart-item { grid-template-columns: minmax(220px, 1fr) 84px 96px 86px; }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .mini-card {
+      padding: 14px;
+      background: var(--surface);
+      border: 1px solid var(--soft-border);
+      border-radius: var(--radius);
+    }
+    .mini-card strong { display: block; font-size: 22px; margin-top: 8px; }
+    .screen-grid { display: grid; gap: 14px; }
+    .filters {
+      display: grid;
+      grid-template-columns: 1fr 150px 150px 150px;
+      gap: 10px;
+      padding: 14px;
+    }
+    .filters input, .filters select {
+      border: 1px solid var(--border);
+      background: var(--surface-3);
+      color: var(--text);
+      border-radius: 7px;
+      padding: 11px;
+    }
+    .sale-row { grid-template-columns: 90px 110px 1fr 130px 120px 130px; }
+    .stock-row { grid-template-columns: 90px 1fr 110px 110px 130px 110px; }
+    .import-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .impact-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .maintenance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+    @media (max-width: 1180px) {
+      body { min-width: 900px; }
+      .variant-a, .variant-c .workspace { grid-template-columns: 1fr; }
+      .variant-b { grid-template-columns: 230px minmax(0, 1fr); }
+      .variant-b .operator { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1>Loja da Basilica</h1>
+        <span>PDV moderno para venda, estoque e fechamento</span>
+      </div>
+      <div class="clock">
+        <strong>15:42</strong>
+        <span>Periodo 03 | Venda #128</span>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="Abas principais">
+      <button class="tab active" data-tab="sale">Venda</button>
+      <button class="tab" data-tab="corrections">Vendas e correcoes</button>
+      <button class="tab" data-tab="stock">Estoque</button>
+      <button class="tab" data-tab="import">Importacao</button>
+      <button class="tab" data-tab="reports">Relatorios</button>
+      <button class="tab" data-tab="settings">Configuracoes</button>
+    </nav>
+
+    <main class="content" id="app"></main>
+  </div>
+
+  <div class="prototype-note">PROTOTYPE - dados ficticios</div>
+
+  <div class="modal-backdrop" id="saleModal" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header>
+        <div>
+          <h2 id="modalTitle" class="section-title">Detalhe da venda #126</h2>
+          <div class="subtle">Finalizada hoje as 14:18 por Ana Paula</div>
+        </div>
+        <button class="ghost" data-close-modal>Fechar <span class="kbd">Esc</span></button>
+      </header>
+      <div class="modal-body">
+        <div class="dashboard-grid">
+          <div class="mini-card"><span class="subtle">Total valido</span><strong>R$ 86,40</strong></div>
+          <div class="mini-card"><span class="subtle">Pagamento</span><strong>Pix</strong></div>
+          <div class="mini-card"><span class="subtle">Status</span><strong>Corrigida</strong></div>
+        </div>
+        <div class="panel">
+          <div class="table-head" style="grid-template-columns: 1fr 80px 100px 120px;">
+            <span>Produto</span><span>Qtd</span><span>Valor</span><span>Acao</span>
+          </div>
+          <div class="cart-item" style="grid-template-columns: 1fr 80px 100px 120px;">
+            <div><div class="item-name">Vela votiva branca</div><div class="subtle">Cod. 1024</div></div>
+            <strong>3</strong><span class="money">R$ 24,00</span><button class="ghost">Alterar</button>
+          </div>
+          <div class="cart-item" style="grid-template-columns: 1fr 80px 100px 120px;">
+            <div><div class="item-name">Terco madeira</div><div class="subtle">Cod. 1880</div></div>
+            <strong>1</strong><span class="money">R$ 62,40</span><button class="danger">Remover</button>
+          </div>
+        </div>
+        <div class="panel" style="padding: 14px; background: var(--warning-soft); color: var(--warning);">
+          <strong>Confirmacao de correcao</strong>
+          <p style="margin: 6px 0 0;">Acoes sensiveis registram responsavel, data/hora e ajustam estoque automaticamente.</p>
+        </div>
+      </div>
+      <footer>
+        <button class="ghost">Alterar pagamento</button>
+        <button class="danger">Cancelar venda</button>
+        <button class="primary">Salvar correcao</button>
+      </footer>
+    </div>
+  </div>
+
+  <div class="switcher" aria-label="Alternar variante do prototipo">
+    <button id="prevVariant" aria-label="Variante anterior">&larr;</button>
+    <div class="switcher-label" id="variantLabel"></div>
+    <button id="nextVariant" aria-label="Proxima variante">&rarr;</button>
+  </div>
+
+  <script>
+    const variants = {
+      A: "Command Center",
+      B: "Dense Terminal",
+      C: "Guided Workspace"
+    };
+
+    const cart = [
+      ["1024", "Vela votiva branca", "3", "R$ 8,00", "R$ 24,00"],
+      ["1880", "Terco madeira", "1", "R$ 62,40", "R$ 62,40"],
+      ["2210", "Medalha Sao Bento", "2", "R$ 12,00", "R$ 24,00"]
+    ];
+
+    const state = {
+      tab: "sale",
+      theme: localStorage.getItem("prototype-theme") || "light"
+    };
+
+    document.documentElement.dataset.theme = state.theme;
+
+    function getVariant() {
+      const key = new URLSearchParams(location.search).get("variant") || "A";
+      return variants[key] ? key : "A";
+    }
+
+    function setVariant(key) {
+      const params = new URLSearchParams(location.search);
+      params.set("variant", key);
+      history.replaceState(null, "", `${location.pathname}?${params}`);
+      render();
+    }
+
+    function cycleVariant(delta) {
+      const keys = Object.keys(variants);
+      const current = keys.indexOf(getVariant());
+      const next = keys[(current + delta + keys.length) % keys.length];
+      setVariant(next);
+    }
+
+    function moneyTotal() {
+      return "R$ 110,40";
+    }
+
+    function cartRows(layout = "wide") {
+      const grid = layout === "compact"
+        ? "32px minmax(220px, 1fr) 70px 92px"
+        : "minmax(220px, 1fr) 82px 96px 84px";
+      return cart.map((item, index) => `
+        <div class="cart-item" style="grid-template-columns:${grid}">
+          ${layout === "compact" ? `<strong>${index + 1}</strong>` : ""}
+          <div>
+            <div class="item-name">${item[1]}</div>
+            <div class="subtle">Cod. ${item[0]} ${item[0] === "2210" ? "<span class='pill warn'>5 produtos restantes</span>" : ""}</div>
+          </div>
+          <strong>${item[2]} un.</strong>
+          <span class="money">${item[4]}</span>
+          ${layout === "compact" ? "" : "<button class='ghost'>Editar</button>"}
+        </div>
+      `).join("");
+    }
+
+    function paymentBlock() {
+      return `
+        <div class="panel" style="padding:14px; display:grid; gap:12px;">
+          <div>
+            <h2 class="section-title">Pagamento</h2>
+            <span class="subtle">Escolha a forma para liberar finalizacao.</span>
+          </div>
+          <div class="pay-grid">
+            <button class="pay-option">Debito <span class="kbd">F3</span></button>
+            <button class="pay-option">Credito <span class="kbd">F4</span></button>
+            <button class="pay-option active">Pix <span class="kbd">F5</span></button>
+            <button class="pay-option">Dinheiro <span class="kbd">F6</span></button>
+          </div>
+          <div class="panel" style="padding:12px; background:var(--surface-3); box-shadow:none;">
+            <span class="subtle">Total da venda</span>
+            <div class="total">${moneyTotal()}</div>
+            <span class="pill good">Pronta para finalizar</span>
+          </div>
+          <button class="primary">Finalizar venda <span class="kbd">F8</span></button>
+        </div>
+      `;
+    }
+
+    function searchBlock(label = "Buscar produto") {
+      return `
+        <div class="search">
+          <label class="subtle">${label} <span class="kbd">F2</span></label>
+          <input value="vela" aria-label="Buscar produto" />
+          <div class="panel" style="padding:10px; box-shadow:none;">
+            <div class="pill info">Busca ambigua</div>
+            <span class="subtle">Use setas e Enter para selecionar: Vela votiva branca, Vela 7 dias, Vela aromatica.</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function VariantA() {
+      return `
+        <section class="variant-a">
+          <div class="left-stack">
+            <div class="panel command-search">${searchBlock("Escaneie o codigo ou busque pelo nome")}</div>
+            <div class="panel">
+              <div class="table-head" style="grid-template-columns:minmax(220px,1fr) 82px 96px 84px;">
+                <span>Item</span><span>Qtd</span><span>Total</span><span></span>
+              </div>
+              ${cartRows()}
+            </div>
+            ${secondaryScreens()}
+          </div>
+          <aside class="right-stack">
+            <div class="panel" style="padding:14px;">
+              <h2 class="section-title">Status da venda</h2>
+              <p class="subtle">Foco na busca, carrinho valido e Pix selecionado.</p>
+              <div style="display:grid; gap:8px; margin-top:12px;">
+                <span class="pill good">3 itens no carrinho</span>
+                <span class="pill warn">1 alerta de estoque baixo</span>
+                <span class="pill good">Pagamento selecionado</span>
+              </div>
+            </div>
+            ${paymentBlock()}
+          </aside>
+        </section>
+      `;
+    }
+
+    function VariantB() {
+      return `
+        <section class="variant-b">
+          <aside class="panel rail">
+            <h2 class="section-title">Comandos</h2>
+            <p class="subtle">Layout denso para operador experiente.</p>
+            <div class="quick-list">
+              <div class="quick-card"><span class="kbd">F2</span> Buscar produto</div>
+              <div class="quick-card"><span class="kbd">F4</span> Pagamento</div>
+              <div class="quick-card"><span class="kbd">F8</span> Finalizar</div>
+              <div class="quick-card"><span class="kbd">Esc</span> Cancelar acao</div>
+            </div>
+            <hr style="border:0;border-top:1px solid var(--border);margin:14px 0;">
+            <span class="pill warn">Medalha: 5 restantes</span>
+          </aside>
+          <main class="panel receipt">
+            ${searchBlock("Entrada rapida")}
+            <div style="height:12px;"></div>
+            <div class="table-head" style="grid-template-columns:32px minmax(220px,1fr) 70px 92px;">
+              <span>#</span><span>Produto</span><span>Qtd</span><span>Total</span>
+            </div>
+            ${cartRows("compact")}
+          </main>
+          <aside class="panel operator">
+            <h2 class="section-title">Fechamento</h2>
+            <div class="total">${moneyTotal()}</div>
+            <p class="subtle">Pix selecionado. Venda pronta.</p>
+            <div class="pay-grid">
+              <button class="pay-option active">Pix</button>
+              <button class="pay-option">Dinheiro</button>
+              <button class="pay-option">Debito</button>
+              <button class="pay-option">Credito</button>
+            </div>
+            <button class="primary" style="width:100%;margin-top:12px;">Finalizar <span class="kbd">F8</span></button>
+          </aside>
+        </section>
+      `;
+    }
+
+    function VariantC() {
+      return `
+        <section class="variant-c">
+          <div class="panel stepper">
+            <div class="step active">1. Buscar</div>
+            <div class="step active">2. Carrinho</div>
+            <div class="step active">3. Pagamento</div>
+            <div class="step">4. Finalizar</div>
+          </div>
+          <div class="workspace">
+            <div class="panel" style="padding:16px;">
+              ${searchBlock("Proximo produto")}
+              <div style="height:12px;"></div>
+              <h2 class="section-title">Carrinho em andamento</h2>
+              ${cartRows()}
+            </div>
+            <div style="display:grid; gap:14px;">
+              ${paymentBlock()}
+              <div class="panel" style="padding:14px;">
+                <h2 class="section-title">Orientacao</h2>
+                <p class="subtle">Variante com fluxo mais guiado para reduzir erro de operador novo.</p>
+              </div>
+            </div>
+          </div>
+          ${secondaryScreens()}
+        </section>
+      `;
+    }
+
+    function correctionsScreen() {
+      return `
+        <section class="screen-grid">
+          <div class="panel filters">
+            <input placeholder="Numero, produto ou responsavel" value="terco">
+            <select><option>Hoje</option></select>
+            <select><option>Pagamento</option></select>
+            <select><option>Status</option></select>
+          </div>
+          <div class="panel">
+            <div class="table-head" style="grid-template-columns:90px 110px 1fr 130px 120px 130px;">
+              <span>Venda</span><span>Horario</span><span>Resumo</span><span>Pagamento</span><span>Status</span><span></span>
+            </div>
+            <div class="sale-row">
+              <strong>#128</strong><span>15:42</span><span>3 itens - Ana Paula</span><span>Pix</span><span class="pill good">Valida</span><button data-open-modal>Detalhe</button>
+            </div>
+            <div class="sale-row">
+              <strong>#126</strong><span>14:18</span><span>2 itens - Ana Paula</span><span>Pix</span><span class="pill warn">Corrigida</span><button data-open-modal>Detalhe</button>
+            </div>
+            <div class="sale-row">
+              <strong>#121</strong><span>11:03</span><span>1 item - Carlos</span><span>Dinheiro</span><span class="pill bad">Cancelada</span><button data-open-modal>Detalhe</button>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function stockScreen() {
+      return `
+        <section class="screen-grid">
+          <div class="dashboard-grid">
+            <div class="mini-card"><span class="subtle">Produtos ativos</span><strong>842</strong></div>
+            <div class="mini-card"><span class="subtle">Baixo estoque</span><strong>18</strong></div>
+            <div class="mini-card"><span class="subtle">Valor a custo</span><strong>R$ 42.918,20</strong></div>
+          </div>
+          <div class="panel">
+            <div class="filters" style="grid-template-columns:1fr 150px 150px 130px;">
+              <input placeholder="Buscar produto" value="vela">
+              <select><option>Status</option></select>
+              <select><option>Categoria</option></select>
+              <button class="primary">Entrada</button>
+            </div>
+            <div class="table-head" style="grid-template-columns:90px 1fr 110px 110px 130px 110px;">
+              <span>Codigo</span><span>Produto</span><span>Estoque</span><span>Preco</span><span>Status</span><span></span>
+            </div>
+            <div class="stock-row"><strong>2210</strong><span>Medalha Sao Bento</span><span>5 un.</span><span>R$ 12,00</span><span class="pill warn">Baixo</span><button>Movimentar</button></div>
+            <div class="stock-row"><strong>1024</strong><span>Vela votiva branca</span><span>43 un.</span><span>R$ 8,00</span><span class="pill good">OK</span><button>Movimentar</button></div>
+          </div>
+        </section>
+      `;
+    }
+
+    function importScreen() {
+      return `
+        <section class="screen-grid">
+          <div class="import-steps">
+            <div class="step active">1. Arquivo</div>
+            <div class="step active">2. Modo</div>
+            <div class="step active">3. Conferencia</div>
+            <div class="step">4. Confirmar</div>
+          </div>
+          <div class="panel" style="padding:16px;">
+            <h2 class="section-title">Conferencia da importacao</h2>
+            <p class="subtle">Revise impactos antes de gravar produtos, precos, custos ou estoque.</p>
+            <div class="impact-grid" style="margin-top:14px;">
+              <div class="mini-card"><span class="subtle">Novos</span><strong>12</strong></div>
+              <div class="mini-card"><span class="subtle">Atualizados</span><strong>134</strong></div>
+              <div class="mini-card"><span class="subtle">Duplicados</span><strong>3</strong></div>
+              <div class="mini-card"><span class="subtle">Diferenca custo</span><strong>R$ 0,04</strong></div>
+            </div>
+            <div class="panel" style="padding:12px;margin-top:14px;background:var(--warning-soft);color:var(--warning);box-shadow:none;">
+              18 produtos terao estoque alterado. Confirme somente depois da conferencia.
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function reportsScreen() {
+      return `
+        <section class="screen-grid">
+          <div class="dashboard-grid">
+            <div class="mini-card"><span class="subtle">Financeiro valido</span><strong>R$ 3.842,90</strong></div>
+            <div class="mini-card"><span class="subtle">Correcoes</span><strong>4</strong></div>
+            <div class="mini-card"><span class="subtle">Canceladas separadas</span><strong>2</strong></div>
+          </div>
+          <div class="panel" style="padding:16px;">
+            <h2 class="section-title">Fechamento do periodo</h2>
+            <p class="subtle">Vendas canceladas nao entram na movimentacao financeira, mas aparecem abaixo para rastreabilidade.</p>
+          </div>
+          <div class="panel" style="padding:16px;background:var(--danger-soft);color:var(--danger);">
+            <strong>Vendas canceladas</strong>
+            <p>#121 - R$ 48,00 - cancelada por Carlos as 11:08. Estoque devolvido automaticamente.</p>
+          </div>
+        </section>
+      `;
+    }
+
+    function settingsScreen() {
+      return `
+        <section class="screen-grid">
+          <div class="maintenance-grid">
+            <div class="panel" style="padding:16px;">
+              <h2 class="section-title">Tema</h2>
+              <p class="subtle">Escolha manual, com tema claro como padrao.</p>
+              <div class="theme-toggle" style="justify-content:flex-start;margin-top:12px;">
+                <button data-theme-choice="light">Claro</button>
+                <button data-theme-choice="dark">Escuro</button>
+              </div>
+            </div>
+            <div class="panel" style="padding:16px;">
+              <h2 class="section-title">Backup e restauracao</h2>
+              <p class="subtle">Restaurar banco e uma acao sensivel e exige confirmacao forte.</p>
+              <button class="primary">Criar backup</button>
+              <button class="danger">Restaurar backup</button>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function secondaryScreens() {
+      return `
+        <div class="dashboard-grid">
+          <div class="mini-card"><span class="subtle">Hoje</span><strong>R$ 3.842,90</strong></div>
+          <div class="mini-card"><span class="subtle">Vendas</span><strong>37</strong></div>
+          <div class="mini-card"><span class="subtle">Correcoes</span><strong>4</strong></div>
+        </div>
+      `;
+    }
+
+    function saleScreen() {
+      const key = getVariant();
+      if (key === "B") return VariantB();
+      if (key === "C") return VariantC();
+      return VariantA();
+    }
+
+    function render() {
+      const key = getVariant();
+      const app = document.getElementById("app");
+      const screens = {
+        sale: saleScreen,
+        corrections: correctionsScreen,
+        stock: stockScreen,
+        import: importScreen,
+        reports: reportsScreen,
+        settings: settingsScreen
+      };
+      app.innerHTML = screens[state.tab]();
+      document.querySelectorAll(".tab").forEach(tab => {
+        tab.classList.toggle("active", tab.dataset.tab === state.tab);
+      });
+      document.getElementById("variantLabel").textContent = `${key} - ${variants[key]}`;
+      document.querySelectorAll("[data-theme-choice]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.themeChoice === state.theme);
+      });
+      bindDynamicActions();
+    }
+
+    function bindDynamicActions() {
+      document.querySelectorAll("[data-open-modal]").forEach(button => {
+        button.addEventListener("click", () => {
+          document.getElementById("saleModal").classList.add("open");
+        });
+      });
+      document.querySelectorAll("[data-theme-choice]").forEach(button => {
+        button.addEventListener("click", () => {
+          state.theme = button.dataset.themeChoice;
+          localStorage.setItem("prototype-theme", state.theme);
+          document.documentElement.dataset.theme = state.theme;
+          render();
+        });
+      });
+    }
+
+    document.querySelectorAll(".tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        state.tab = tab.dataset.tab;
+        render();
+      });
+    });
+
+    document.getElementById("prevVariant").addEventListener("click", () => cycleVariant(-1));
+    document.getElementById("nextVariant").addEventListener("click", () => cycleVariant(1));
+    document.querySelector("[data-close-modal]").addEventListener("click", () => {
+      document.getElementById("saleModal").classList.remove("open");
+    });
+    document.addEventListener("keydown", event => {
+      const tag = event.target.tagName;
+      const editable = event.target.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (!editable && event.key === "ArrowLeft") cycleVariant(-1);
+      if (!editable && event.key === "ArrowRight") cycleVariant(1);
+      if (event.key === "Escape") document.getElementById("saleModal").classList.remove("open");
+    });
+
+    render();
+  </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+Closes #12
+
+## Resumo das Mudanças
+- **Aba de Configurações**: Redesenhada utilizando o sistema visual compartilhado (Variante A "Command Center"), organizada em duas seções:
+  - **Aparência e Tema Visual**: Escolha manual de Tema Claro (Padrão) e Tema Escuro com badge indicando o tema ativo e alternância dinâmica.
+  - **Manutenção e Banco de Dados**: Área dedicada de backup e restauração fora do rodapé da Venda.
+- **Backup e Restauração fora da Venda**: Removidos os botões de backup do rodapé da tela de Venda no caixa.
+- **Criar Backup**: Apresentação simples e direta com cartão explicativo e botão de ação seguro.
+- **Restaurar Backup**: Card com tom de alerta (`danger_soft`), badge de `AÇÃO SENSÍVEL DE MANUTENÇÃO`, linguagem explícita de risco e confirmação forte antes da execução.
+
+## Validações
+- Testes automatizados rodados via pytest (`test_sistema_visual.py`, `test_configuracoes_ui.py`, `test_backup_service.py`, `test_vendas_correcoes_service.py`, `test_estoque_regras.py`).
+- Smoke test de importação e inicialização da interface `CaixaApp`.

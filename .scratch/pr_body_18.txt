@@ -1,0 +1,13 @@
+Closes #18
+
+## Resumo das Mudanças
+- **Aba de Relatórios e Fechamento Redesenhada**:
+  - **Fechamento Financeiro Líquido**: Seção principal destacando exclusivamente a receita financeira válida/real (Total Líquido acumulado, total de vendas válidas e total de correções).
+  - **Conciliação por Forma de Pagamento**: Tabela/Grid detalhada listando transações e acumulado para cada forma de pagamento (Pix, Débito, Crédito, Dinheiro, Misto).
+  - **Área Separada para Vendas Canceladas**: Quadro isolado com aviso de alerta (`⚠️ Vendas canceladas NÃO integram a receita líquida nem a movimentação financeira acima`) e tabela `DataTable` para rastreabilidade e auditoria de cancelamentos.
+  - **Relatórios Operacionais & Exportação**: Ações operacionais com um clique para exportar a conciliação do período (`.xlsx`) e a posição completa de estoque (`.xlsx`).
+- **Integração Backend**: Consome `relatorios_service.obter_fechamento_financeiro(periodo_id)` entregue na issue #17.
+
+## Validações
+- Testes automatizados executados via pytest (`test_relatorios_ui.py`, `test_venda_variante_a_ui.py`, `test_vendas_correcoes_service.py`, `test_vendas_correcoes_ui.py`, `test_importacao_conta_azul.py`, `test_importacao_guiada_ui.py`, `test_sistema_visual.py`, `test_backup_service.py`, `test_estoque_regras.py`).
+- Smoke test de inicialização da classe `CaixaApp` com a aba de Relatórios redesenhada.

@@ -1,0 +1,29 @@
+Closes #15
+
+## Resumo das Mudanças
+- **Substituição de "Últimas Vendas" por "Vendas e correções"**: Redesenho completo da aba de histórico/consulta de vendas com linguagem visual moderna (Variante A "Command Center").
+- **Filtros de Pesquisa Completos**:
+  - Número da venda (`num_venda`)
+  - Data Início / Data Fim (`data_inicio`, `data_fim`)
+  - Forma de Pagamento (`pagamento`)
+  - Status (`valid`, `corrected`, `cancelled`)
+  - Responsável (`responsavel`)
+  - Produto (`produto`)
+- **Tabela com Status Visuais Distintos**:
+  - `VÁLIDA` (Badge verde `primary`)
+  - `CORRIGIDA` (Badge amarelo `warning`)
+  - `CANCELADA` (Badge vermelho `danger`)
+- **Modal de Detalhes da Venda (`VendaDetailModal`)**:
+  - Exibição de cabeçalho, resumo financeiro, forma de pagamento e tabela de itens.
+  - Painel de **Histórico de Auditoria** (`correction_history`) com registros anteriores.
+  - Painel de **Ações Disponíveis** (`available_actions`):
+    - 💳 Alterar Pagamento
+    - ✏️ Alterar Quantidade
+    - 🗑️ Remover Item (com confirmação sensível de risco)
+    - 🚫 Cancelar Venda (com confirmação forte de anulação e devolução de estoque)
+  - Bloqueio de correções em vendas canceladas (`status == 'cancelled'`).
+- **Contratos & Mocks Integrados**: Consome os serviços reais de `app.services.vendas_service` com fallback automático de mocks estruturados quando o banco local não possui dados.
+
+## Validações
+- Testes automatizados executados via pytest (`test_vendas_correcoes_service.py`, `test_vendas_correcoes_ui.py`, `test_sistema_visual.py`, `test_backup_service.py`, `test_estoque_regras.py`).
+- Smoke test de importação e inicialização da classe `CaixaApp`.

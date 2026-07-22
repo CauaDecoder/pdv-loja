@@ -1,0 +1,24 @@
+Closes #16
+
+## Resumo das Mudanças
+- **Tela de Venda Variante A "Command Center"**:
+  - **Busca de Produto Forte**: Busca ampliada no topo com placeholder explicativo, botão de atalho `[F2]`, foco automático ao carregar a tela e restauração de foco após gravação/limpeza.
+  - **Navegação Orientada por Teclado**:
+    - `<Down>` navega do campo de busca para a lista de sugestões.
+    - `<Up>` retorna da primeira sugestão para o campo de busca.
+    - `<Return>` adiciona diretamente produtos com código exato ou correspondência única.
+    - `<Escape>` limpa o campo de busca e esconde sugestões.
+  - **Carrinho & Alerta de Estoque Baixo**:
+    - Exibição clara de quantidade, código, preço unitário e subtotal.
+    - Tag visual de alerta quando o estoque do produto for `<= 5` (ex: `⚠️ Estoque baixo: 3 produtos restantes`).
+    - Alerta auxiliar no card de status quando itens com estoque baixo estiverem no carrinho.
+  - **Painel de Pagamento com Detalhes Progressivos**:
+    - Destaque visual da forma de pagamento ativa.
+    - Coleta de bandeira, parcelas, dinheiro recebido e troco calculado.
+  - **Botão Finalizar Venda**:
+    - Desabilitado até preenchimento completo e ativado em destaque verde/primário quando pronto.
+  - **Atalhos Discretos**: Exibição da barra `[F2] Buscar | [Enter] Confirmar | [Esc] Limpar busca`.
+
+## Validações
+- Testes automatizados executados via pytest (`test_venda_variante_a_ui.py`, `test_vendas_correcoes_service.py`, `test_vendas_correcoes_ui.py`, `test_importacao_conta_azul.py`, `test_importacao_guiada_ui.py`, `test_sistema_visual.py`, `test_backup_service.py`, `test_estoque_regras.py`).
+- Smoke test de inicialização da classe `CaixaApp` com a Tela de Venda redesenhada na Variante A.

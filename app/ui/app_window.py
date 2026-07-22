@@ -418,7 +418,7 @@ class CaixaApp(tk.Tk):
 
         hero = Card(pad, padding=14, bg=theme.FUNDO2)
         hero.pack(fill="x", pady=(0, 12))
-        tk.Label(hero, text="Registro de venda (Variante A)", bg=theme.FUNDO2, fg=theme.TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        tk.Label(hero, text="Registro de venda", bg=theme.FUNDO2, fg=theme.TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w")
         tk.Label(hero, text="Busque pelo nome, código interno ou código de barras para montar a venda.", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 9), wraplength=560, justify="left").pack(anchor="w", pady=(4, 0))
 
         search_card = Card(pad, padding=12)

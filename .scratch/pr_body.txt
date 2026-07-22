@@ -1,0 +1,16 @@
+Redesenho do módulo de Estoque com foco operacional seguindo a Variante A ("Command Center") e o sistema visual compartilhado do Tkinter.
+
+### Alterações:
+- **PainelEstoque (`estoque/painel.py`)**:
+  - Reorganização dos cards de indicadores (KPIs) para visão compacta de apoio operacional.
+  - Campo de busca proeminente (`SearchInput`) e filtros secundários por status, curva ABC, categoria, fornecedor e situação.
+  - Tabela legível (`Treeview` / `DataTable`) com pílulas/badges dinâmicas de status (`CRITICO`, `ALERTA`, `OK`, `MORTO`, `INATIVO`).
+  - Adicionado estado vazio (`EmptyState`) com botão para limpar filtros.
+  - Barra de ações operacionais com botões categorizados (`Primary`, `Secondary`, `Danger`, `Gold`, `Ghost`).
+  - Modernização dos modais internos (`_abrir_detalhe`, `_form_produto`, `_dialog_produto_quantidade`, `_abrir_movimentacoes`) com `BaseModal`, `Card`, `LabeledField` e `StyledEntry`.
+  - Confirmação sensível (`confirmar_acao_sensivel`) para registro de perda de estoque e inativação/reativação de produto.
+  - Suporte dinâmico a Tema Claro e Escuro (`obter_tema_atual()`).
+- **Testes**:
+  - Adicionado `test_painel_estoque_instanciacao` em `tests/test_sistema_visual.py`.
+
+Closes #13

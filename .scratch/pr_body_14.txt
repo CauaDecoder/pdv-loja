@@ -1,0 +1,14 @@
+Closes #14
+
+## Resumo das Mudanças
+- **Aba de Importação em 4 Etapas**: Redesenho completo da interface de importação de produtos como um fluxo guiado interativo:
+  - **1. Selecionar Arquivo**: Área moderna de seleção com apresentação de nome de arquivo, caminho completo e tamanho.
+  - **2. Escolher Modo**: Seleção dos 3 modos de tratamento de estoque (`Atualizar pelo Disponível`, `Preservar estoque`, `Inventário inicial`) em cartões explicativos.
+  - **3. Conferência & Impactos**: Dashboard com métricas de inserções, atualizações, ignorados e divergências, alertas financeiros para diferenças de custo (`> R$ 0,05`) e mapeamento de inconsistências de cadastro (duplicados, sem SKU, sem preço).
+  - **4. Gravação & Confirmação**: Resumo final da operação com aviso de risco e botão para gravação no banco de dados local SQLite, com tela de resultado pós-importação.
+- **Barra de Progresso (Stepper)**: Componente com 4 passos no topo com pílulas visuais destacando a etapa ativa e etapas concluídas.
+- **Integração na Casca**: Instanciação do componente `ImportacaoGuidedView` dentro de `_build_importacao_tab()` no `app_window.py`.
+
+## Validações
+- Testes automatizados rodados via pytest (`test_importacao_conta_azul.py`, `test_importacao_guiada_ui.py`, `test_sistema_visual.py`, `test_backup_service.py`, `test_vendas_correcoes_service.py`, `test_estoque_regras.py`).
+- Smoke test de importação e inicialização da classe `CaixaApp`.
