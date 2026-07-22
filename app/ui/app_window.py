@@ -22,9 +22,38 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+"""
+Aplicacao principal do caixa da Loja da Basilica.
+
+Este modulo concentra a interface grafica em Tkinter e orquestra o fluxo
+principal do sistema:
+
+1. Inicializa a base local de dados e o estado do caixa.
+2. Monta as abas da interface de vendas, historico e estoque.
+3. Controla o carrinho, os pagamentos e o fechamento das vendas.
+4. Abre e encerra periodos, exporta relatorios e importa produtos.
+
+Dependencias de negocio:
+- `database.py`: persistencia, consultas e registro das vendas.
+- `relatorio.py`: geracao do arquivo final do periodo.
+- `estoque/painel.py`: painel visual de manutencao do estoque.
+
+Execucao: `python main.py`
+Requisitos: Python 3.10+, openpyxl
+"""
+
+import tkinter as tk
+from datetime import datetime
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
 import database as db
 from app.services import backup_service, importacao_service, relatorios_service
+from app.ui.importacao_view import ImportacaoGuidedView
+from app.ui.relatorios_view import RelatoriosView
+from app.ui.vendas_correcoes_view import VendasCorrecoesView
+from estoque.dashboard import DashboardEstoque
+from estoque.painel import PainelEstoque
 from app.ui.components import (
     Card,
     DataTable,
@@ -37,11 +66,6 @@ from app.ui.components import (
     action_button,
     configure_styles,
 )
-from app.ui.importacao_dialog import confirmar_importacao
-from app.ui.vendas_correcoes_view import VendasCorrecoesView
-from app.ui.importacao_view import ImportacaoGuidedView
-from estoque.dashboard import DashboardEstoque
-from estoque.painel import PainelEstoque
 from tema import (
     AZUL,
     BORDA,
@@ -62,10 +86,6 @@ from tema import (
     moeda,
     obter_nome_tema_atual,
 )
-
-# Listas de apoio usadas em dialogs e validacoes.
-FORMAS_PGTO = ["Debito", "Credito", "Pix", "Dinheiro"]
-BANDEIRAS_DEBITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
 BANDEIRAS_CREDITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
 PARCELAS_CREDITO = [str(i) for i in range(1, 13)]
 PLACEHOLDER_BUSCA = "Escaneie o código ou busque pelo nome"
@@ -574,40 +594,12 @@ class CaixaApp(tk.Tk):
         self._importacao_view.pack(fill="both", expand=True)
 
     def _build_relatorios_tab(self):
-        """Monta o frame da casca para a aba de Relatórios (preparatório para #14)."""
-        pad = tk.Frame(self._aba_relatorios, bg=TEMA_ATUAL["fundo"], padx=18, pady=16)
-        pad.pack(fill="both", expand=True)
-
-        PageHeader(
-            pad,
-            "Relatórios e fechamento",
-            "Consulte a movimentação financeira líquida e relatórios operacionais do período.",
-        ).pack(fill="x", pady=(0, 16))
-
-        card = Card(pad, padding=20)
-        card.pack(fill="x", pady=(0, 16))
-
-        SectionHeader(
-            card,
-            "Fechamento do Período",
-            "Exportação e conciliação financeira da operação diária.",
-        ).pack(anchor="w", fill="x", pady=(0, 14))
-
-        tk.Label(
-            card,
-            text="A separação visual de vendas válidas, canceladas e relatórios de estoque será implementada na issue #14.",
-            bg=TEMA_ATUAL["surface"],
-            fg=TEMA_ATUAL["texto_suave"],
-            font=FONTES["corpo"],
-        ).pack(anchor="w", pady=(0, 16))
-
-        action_button(
-            card,
-            text="Exportar relatório do período",
-            command=self._exportar_relatorio,
-            bg=TEMA_ATUAL["primaria"],
-            fg="#FFFFFF",
-        ).pack(anchor="w")
+        """Monta a aba de Relatórios e Fechamento com movimentação líquida (Issue #18)."""
+        self._relatorios_view = RelatoriosView(
+            self._aba_relatorios,
+            periodo_id_provider=lambda: getattr(self, "_periodo_id", 1),
+        )
+        self._relatorios_view.pack(fill="both", expand=True)
 
     def _build_configuracoes_tab(self):
         """Monta a aba de Configurações e Manutenção (Tema claro/escuro, Backup/Restauração)."""
