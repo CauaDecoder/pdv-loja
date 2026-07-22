@@ -22,7 +22,11 @@ class ImportacaoContaAzulTest(unittest.TestCase):
         return caminho
 
     def test_previsualiza_products2_com_disponivel(self):
-        previa = database.previsualizar_importacao("products2.csv")
+        caminho = self._escrever_csv(
+            "products2.csv",
+            "SKU;Nome do Produto;Disponível;Valor de Venda;Custo Médio\nSKU-10;Produto Teste;10;15,00;8,00\n",
+        )
+        previa = database.previsualizar_importacao(str(caminho))
 
         self.assertTrue(previa["estoque_mapeado"])
         self.assertEqual(database._normalizar_chave(previa["coluna_estoque"]), "disponivel")
