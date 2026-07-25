@@ -1241,16 +1241,31 @@ class CaixaApp(tk.Tk):
 
     def _coletar_pagamento_misto(self) -> bool:
         """Coleta um pagamento composto por duas ou mais formas."""
-        dialog = tk.Toplevel(self)
-        dialog.title("Mais de uma forma")
-        dialog.configure(bg=theme.FUNDO)
+        dialog = BaseModal(
+            self,
+            title="Mais de uma forma",
+            subtitle="Selecione duas ou mais formas e detalhe os cartoes escolhidos.",
+            width=680,
+            height=620,
+        )
         dialog.resizable(False, False)
-        dialog.transient(self)
-        dialog.grab_set()
-        bind_escape_to_close(dialog)
 
-        frame = tk.Frame(dialog, bg=theme.FUNDO, padx=18, pady=16)
-        frame.pack(fill="both", expand=True)
+        tema = theme.TEMA_ATUAL
+        canvas = tk.Canvas(dialog.body_frame, bg=tema["bg"], highlightthickness=0)
+        scroll = ttk.Scrollbar(dialog.body_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        frame = tk.Frame(canvas, bg=tema["bg"])
+        frame_window = canvas.create_window((0, 0), window=frame, anchor="nw")
+        frame.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(frame_window, width=event.width))
+
+        def rolar(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        dialog.bind("<MouseWheel>", rolar)
         tk.Label(frame, text="Selecione duas formas de pagamento", bg=theme.FUNDO, fg=theme.TEXTO, font=("Segoe UI", 13, "bold")).pack(
             anchor="w"
         )
@@ -1260,16 +1275,27 @@ class CaixaApp(tk.Tk):
 
         vars_pgto = {forma: tk.BooleanVar(value=False) for forma in FORMAS_PGTO_MISTO}
         detalhes_cartao = {}
+        total_venda = self._total_carrinho()
 
         def detalhe_texto(forma: str) -> str:
             info = detalhes_cartao.get(forma, {})
             if forma == "Debito":
-                bandeira = info.get("bandeira", BANDEIRAS_DEBITO[0])
+                bandeira_var = info.get("bandeira_var")
+                bandeira = bandeira_var.get() if bandeira_var else BANDEIRAS_DEBITO[0]
                 return f"{bandeira}"
             if forma == "Credito":
-                bandeira = info.get("bandeira", BANDEIRAS_CREDITO[0])
-                parcelas = info.get("parcelas", "1")
+                bandeira_var = info.get("bandeira_var")
+                parcela_var = info.get("parcelas_var")
+                bandeira = bandeira_var.get() if bandeira_var else BANDEIRAS_CREDITO[0]
+                parcelas = parcela_var.get() if parcela_var else "1"
                 return f"{bandeira} | {parcelas}x"
+            if forma == "Dinheiro":
+                valor_var = info.get("valor_var")
+                if not valor_var or not valor_var.get().strip():
+                    return ""
+                valor = self._parse_moeda(valor_var.get())
+                troco = max(valor - total_venda, 0)
+                return f"Recebido {moeda(valor)}; troco {moeda(troco)}"
             return ""
 
         def atualizar_visibilidade(forma: str):
@@ -1277,29 +1303,36 @@ class CaixaApp(tk.Tk):
             if not info:
                 return
             if vars_pgto[forma].get():
-                info["card"].pack(fill="x", pady=(0, 2))
+                info["card"].pack(fill="x", pady=(8, 0))
             else:
                 info["card"].pack_forget()
 
         for forma in FORMAS_PGTO_MISTO:
-            linha = tk.Frame(frame, bg=theme.FUNDO)
-            linha.pack(fill="x", pady=2)
+            linha = Card(frame, padding=10)
+            linha.pack(fill="x", pady=(0, 8))
 
             check = tk.Checkbutton(
                 linha,
                 text=ROTULOS_PGTO[forma],
                 variable=vars_pgto[forma],
-                bg=theme.FUNDO,
-                fg=theme.TEXTO,
-                selectcolor=theme.BRANCO,
-                activebackground=theme.FUNDO,
-                font=("Segoe UI", 11),
+                indicatoron=False,
+                bg=tema["surface_2"],
+                fg=tema["text"],
+                selectcolor=tema["primary_soft"],
+                activebackground=tema["surface_hover"],
+                activeforeground=tema["text"],
+                font=FONTES["botao"],
+                relief="flat",
+                bd=0,
+                padx=14,
+                pady=8,
+                cursor="hand2",
                 command=lambda f=forma: atualizar_visibilidade(f),
             )
-            check.pack(side="left", anchor="w")
+            check.pack(fill="x", anchor="w")
 
             if forma in ("Debito", "Credito"):
-                detalhe_card = tk.Frame(linha, bg=theme.FUNDO2, padx=10, pady=8)
+                detalhe_card = tk.Frame(linha, bg=tema["surface"], padx=10, pady=8)
                 detalhes_cartao[forma] = {"card": detalhe_card}
 
                 bandeira_var = tk.StringVar(value=(BANDEIRAS_DEBITO[0] if forma == "Debito" else BANDEIRAS_CREDITO[0]))
@@ -1307,19 +1340,16 @@ class CaixaApp(tk.Tk):
                 tk.Label(
                     detalhe_card,
                     text="Bandeira",
-                    bg=theme.FUNDO2,
-                    fg=theme.MUTED,
+                    bg=tema["surface"],
+                    fg=tema["text_muted"],
                     font=("Segoe UI", 8, "bold"),
-                ).grid(row=0, column=0, sticky="w")
-                bandeira_box = ttk.Combobox(
+                ).pack(anchor="w", pady=(0, 4))
+                self._criar_grade_opcoes(
                     detalhe_card,
-                    textvariable=bandeira_var,
-                    values=BANDEIRAS_DEBITO if forma == "Debito" else BANDEIRAS_CREDITO,
-                    state="readonly",
-                    width=13,
-                    font=("Segoe UI", 10),
+                    bandeira_var,
+                    BANDEIRAS_DEBITO if forma == "Debito" else BANDEIRAS_CREDITO,
+                    colunas=3,
                 )
-                bandeira_box.grid(row=1, column=0, padx=(0, 8), pady=(2, 0), sticky="w")
 
                 if forma == "Credito":
                     parcela_var = tk.StringVar(value="1")
@@ -1327,41 +1357,71 @@ class CaixaApp(tk.Tk):
                     tk.Label(
                         detalhe_card,
                         text="Parcelas",
-                        bg=theme.FUNDO2,
-                        fg=theme.MUTED,
+                        bg=tema["surface"],
+                        fg=tema["text_muted"],
                         font=("Segoe UI", 8, "bold"),
-                    ).grid(row=0, column=1, sticky="w")
-                    parcela_box = ttk.Combobox(
+                    ).pack(anchor="w", pady=(8, 4))
+                    self._criar_grade_opcoes(
                         detalhe_card,
-                        textvariable=parcela_var,
-                        values=PARCELAS_CREDITO,
-                        state="readonly",
-                        width=7,
-                        font=("Segoe UI", 10),
+                        parcela_var,
+                        PARCELAS_CREDITO,
+                        colunas=6,
+                        sufixo="x",
                     )
-                    parcela_box.grid(row=1, column=1, pady=(2, 0), sticky="w")
 
                 detalhe_card.pack_forget()
-                detalhe_card.grid_columnconfigure(0, weight=0)
-                detalhe_card.grid_columnconfigure(1, weight=0)
-                detalhe_card.pack_configure(anchor="e")
-                info_box = tk.Frame(linha, bg=theme.FUNDO)
-                info_box.pack(side="right")
+                atualizar_visibilidade(forma)
+            elif forma == "Dinheiro":
+                detalhe_card = tk.Frame(linha, bg=tema["surface"], padx=10, pady=8)
+                valor_var = tk.StringVar()
+                troco_var = tk.StringVar(value=f"Troco: {moeda(0)}")
+                detalhes_cartao[forma] = {
+                    "card": detalhe_card,
+                    "valor_var": valor_var,
+                    "troco_var": troco_var,
+                }
+
                 tk.Label(
-                    info_box,
-                    text="",
-                    bg=theme.FUNDO,
-                    fg=theme.VERDE_ESC,
-                    font=("Segoe UI", 8, "bold"),
-                ).pack()
-                detalhes_cartao[forma]["info_box"] = info_box
-                detalhe_card.pack(side="right", padx=(8, 0))
+                    detalhe_card,
+                    text=f"Total da venda: {moeda(total_venda)}",
+                    bg=tema["surface"],
+                    fg=tema["text_muted"],
+                    font=FONTES["corpo"],
+                ).pack(anchor="w", pady=(0, 8))
+
+                campo_valor = LabeledField(
+                    detalhe_card,
+                    label="Valor recebido em dinheiro",
+                    widget_factory=lambda parent, var=valor_var: StyledEntry(parent, textvariable=var),
+                    bg=tema["surface"],
+                )
+                campo_valor.widget.pack(fill="x", ipady=4)
+                campo_valor.pack(fill="x", pady=(0, 8))
+
+                tk.Label(
+                    detalhe_card,
+                    textvariable=troco_var,
+                    bg=tema["surface"],
+                    fg=tema["primary"],
+                    font=FONTES["subtitulo"],
+                ).pack(anchor="w")
+
+                def atualizar_troco(*_, var=valor_var, destino=troco_var):
+                    try:
+                        valor = self._parse_moeda(var.get())
+                    except ValueError:
+                        destino.set(f"Troco: {moeda(0)}")
+                        return
+                    destino.set(f"Troco: {moeda(max(valor - total_venda, 0))}")
+
+                valor_var.trace_add("write", atualizar_troco)
+                detalhe_card.pack_forget()
                 atualizar_visibilidade(forma)
             else:
-                tk.Frame(linha, bg=theme.FUNDO).pack(side="right")
+                tk.Frame(linha, bg=tema["surface"]).pack(fill="x")
 
         erro_var = tk.StringVar(value="")
-        tk.Label(frame, textvariable=erro_var, bg=theme.FUNDO, fg=theme.VERMELHO, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0))
+        tk.Label(frame, textvariable=erro_var, bg=tema["bg"], fg=tema["danger"], font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0))
         resultado = {"ok": False, "detalhe": ""}
 
         def confirmar():
@@ -1374,27 +1434,100 @@ class CaixaApp(tk.Tk):
                 if forma in ("Debito", "Credito"):
                     detalhe = detalhe_texto(forma)
                     partes.append(f"{forma} ({detalhe})" if detalhe else forma)
+                elif forma == "Dinheiro":
+                    try:
+                        detalhe = detalhe_texto(forma)
+                    except ValueError:
+                        erro_var.set("Informe um valor valido em dinheiro, como 50 ou 50,00.")
+                        return
+                    if not detalhe:
+                        erro_var.set("Informe o valor recebido em dinheiro.")
+                        return
+                    partes.append(f"Dinheiro ({detalhe})")
                 else:
                     partes.append(forma)
-            resultado.update({"ok": True, "detalhe": " + ".join(partes)})
-            dialog.destroy()
+            valor_recebido = None
+            troco = None
+            if "Dinheiro" in selecionadas:
+                valor_recebido = self._parse_moeda(detalhes_cartao["Dinheiro"]["valor_var"].get())
+                troco = max(valor_recebido - total_venda, 0)
+            resultado.update({
+                "ok": True,
+                "detalhe": " + ".join(partes),
+                "valor_recebido": valor_recebido,
+                "troco": troco,
+            })
+            dialog.close()
 
-        botoes = tk.Frame(frame, bg=theme.FUNDO)
-        botoes.pack(fill="x", pady=(14, 0))
-        tk.Button(botoes, text="Cancelar", bg=theme.FUNDO2, fg=theme.MUTED, relief="flat", command=dialog.destroy).pack(
-            side="right", padx=(8, 0), ipadx=10, ipady=6
+        action_button(dialog.footer_frame, text="Cancelar", variant="ghost", command=dialog.close).pack(
+            side="right", padx=(8, 0)
         )
-        tk.Button(botoes, text="Confirmar", bg=theme.VERDE_ESC, fg=theme.BRANCO, relief="flat", command=confirmar).pack(
-            side="right", ipadx=10, ipady=6
-        )
+        action_button(dialog.footer_frame, text="Confirmar", variant="primary", command=confirmar).pack(side="right")
         self.wait_window(dialog)
 
         if not resultado["ok"]:
             return False
         self._pagamento_detalhe = resultado["detalhe"]
-        self._valor_recebido = None
-        self._troco = None
+        self._valor_recebido = resultado.get("valor_recebido")
+        self._troco = resultado.get("troco")
         return True
+
+    def _criar_grade_opcoes(
+        self,
+        parent: tk.Widget,
+        variable: tk.StringVar,
+        opcoes: list[str] | tuple[str, ...],
+        *,
+        colunas: int = 3,
+        sufixo: str = "",
+    ) -> list[tk.Radiobutton]:
+        """Cria opcoes visiveis em vez de dropdown para escolhas curtas."""
+        tema = theme.TEMA_ATUAL
+        grid = tk.Frame(parent, bg=tema["surface"])
+        grid.pack(fill="x", pady=(4, 8))
+        botoes: list[tk.Radiobutton] = []
+
+        def atualizar():
+            for botao in botoes:
+                selecionado = botao.cget("value") == variable.get()
+                botao.configure(
+                    bg=tema["primary_soft"] if selecionado else tema["surface_2"],
+                    fg=tema["primary"] if selecionado else tema["text"],
+                    relief="solid" if selecionado else "flat",
+                    bd=1 if selecionado else 0,
+                    highlightbackground=tema["primary"] if selecionado else tema["border_soft"],
+                )
+
+        for idx, opcao in enumerate(opcoes):
+            row = idx // colunas
+            col = idx % colunas
+            grid.columnconfigure(col, weight=1, uniform="opcoes")
+            botao = tk.Radiobutton(
+                grid,
+                text=f"{opcao}{sufixo}",
+                value=opcao,
+                variable=variable,
+                indicatoron=False,
+                command=atualizar,
+                bg=tema["surface_2"],
+                fg=tema["text"],
+                selectcolor=tema["primary_soft"],
+                activebackground=tema["surface_hover"],
+                activeforeground=tema["text"],
+                font=FONTES["botao"],
+                relief="flat",
+                bd=0,
+                padx=10,
+                pady=8,
+                cursor="hand2",
+                highlightthickness=1,
+                highlightbackground=tema["border_soft"],
+            )
+            botao.grid(row=row, column=col, sticky="ew", padx=(0 if col == 0 else 6, 0), pady=(0, 6))
+            botoes.append(botao)
+
+        atualizar()
+        return botoes
 
     def _coletar_bandeira(self, tipo: str) -> bool:
         """Solicita bandeira e, no credito, quantidade de parcelas."""
@@ -1404,8 +1537,8 @@ class CaixaApp(tk.Tk):
             self,
             title="Cartão de débito" if eh_debito else "Cartão de crédito",
             subtitle="Informe os dados que serão registrados na venda e no relatório.",
-            width=480,
-            height=350 if eh_debito else 410,
+            width=560,
+            height=430 if eh_debito else 560,
         )
         dialog.resizable(False, False)
         frame = Card(dialog.body_frame, padding=16)
@@ -1419,14 +1552,7 @@ class CaixaApp(tk.Tk):
             fg=theme.MUTED,
             font=FONTES["label_sm"],
         ).pack(anchor="w")
-        bandeira_box = ttk.Combobox(
-            frame,
-            textvariable=escolhida,
-            values=bandeiras,
-            state="readonly",
-            font=FONTES["corpo"],
-        )
-        bandeira_box.pack(fill="x", pady=(4, 12), ipady=4)
+        self._criar_grade_opcoes(frame, escolhida, bandeiras, colunas=2)
 
         parcela_var = tk.StringVar(value="1")
         if not eh_debito:
@@ -1436,17 +1562,8 @@ class CaixaApp(tk.Tk):
                 bg=theme.BRANCO,
                 fg=theme.MUTED,
                 font=FONTES["label_sm"],
-            ).pack(anchor="w")
-            parcela_box = ttk.Combobox(
-                frame,
-                textvariable=parcela_var,
-                values=PARCELAS_CREDITO,
-                state="readonly",
-                width=8,
-                font=("Segoe UI", 11),
-            )
-            parcela_box.pack(fill="x", pady=(4, 0), ipady=4)
-            parcela_box.set("1")
+            ).pack(anchor="w", pady=(12, 6))
+            self._criar_grade_opcoes(frame, parcela_var, PARCELAS_CREDITO, colunas=4, sufixo="x")
 
         resultado = {"ok": False}
 
@@ -1459,7 +1576,6 @@ class CaixaApp(tk.Tk):
         )
         action_button(dialog.footer_frame, text="Confirmar", variant="primary", command=confirmar).pack(side="right")
         dialog.bind("<Return>", lambda _event: confirmar())
-        bandeira_box.focus_set()
         self.wait_window(dialog)
 
         if not resultado["ok"]:

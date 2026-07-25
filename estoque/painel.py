@@ -243,6 +243,37 @@ class PainelEstoque(tk.Frame):
         )
         self._lbl_resultados.pack(anchor="w", pady=(4, 0))
 
+        acoes_card = Card(self, padding=10)
+        acoes_card.pack(fill="x", padx=ESPACOS["lg"], pady=(0, ESPACOS["sm"]))
+
+        btn_box_top = tk.Frame(acoes_card, bg=tema["surface"])
+        btn_box_top.pack(fill="x")
+
+        botoes_esquerda_top = [
+            ("Novo Produto", "primary", self._novo_produto),
+            ("Entrada", "primary", self._entrada),
+            ("Inventario", "secondary", self._ajuste),
+            ("Editar Produto", "secondary", self._editar_cadastro),
+            ("Detalhes", "secondary", self._abrir_detalhe),
+            ("Movimentacoes", "secondary", self._abrir_movimentacoes),
+        ]
+
+        for texto, variant, cmd in botoes_esquerda_top:
+            action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=12, pady=7).pack(
+                side="left", padx=(0, 6)
+            )
+
+        botoes_direita_top = [
+            ("Perda", "danger", self._perda),
+            ("Inativar/Reativar", "gold", self._alternar_ativo),
+            ("Exportar XLSX", "ghost", self._exportar),
+        ]
+
+        for texto, variant, cmd in botoes_direita_top:
+            action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=12, pady=7).pack(
+                side="right", padx=(6, 0)
+            )
+
         # Tabela de Produtos (Container)
         self._tabela_box = Card(self, padding=0)
         self._tabela_box.pack(fill="both", expand=True, padx=ESPACOS["lg"])
@@ -580,8 +611,8 @@ class PainelEstoque(tk.Frame):
         # Footer
         action_button(
             win.footer_frame,
-            text="Editar Cadastro",
-            command=lambda: [win.close(), self._editar_cadastro()],
+            text="Editar Produto",
+            command=lambda produto=produto: [win.close(), self._editar_produto(produto)],
             variant="primary",
         ).pack(side="right", padx=(8, 0))
 
@@ -607,6 +638,9 @@ class PainelEstoque(tk.Frame):
         produto = self._produto_selecionado()
         if not produto:
             return
+        self._editar_produto(produto)
+
+    def _editar_produto(self, produto: dict):
         dados = self._form_produto("Editar produto", produto)
         if not dados:
             return
