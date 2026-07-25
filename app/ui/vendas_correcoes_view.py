@@ -13,6 +13,12 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any, Callable
 
+from app.payments import (
+    CARD_BRANDS,
+    CARD_INSTALLMENTS,
+    PAYMENT_METHODS,
+    parse_currency,
+)
 from app.services import vendas_service
 from app.ui.components import (
     BaseModal,
@@ -30,12 +36,6 @@ from app.ui.components import (
 )
 from tema import FONTES, TEMA_ATUAL, moeda
 
-FORMAS_PGTO = ["Debito", "Credito", "Pix", "Dinheiro", "Mais de uma forma"]
-BANDEIRAS_DEBITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
-BANDEIRAS_CREDITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
-PARCELAS_CREDITO = [str(i) for i in range(1, 13)]
-
-
 def ler_quantidade(valor: str) -> int:
     """Converte quantidade informada pela UI com mensagem operacional clara."""
     try:
@@ -52,7 +52,7 @@ def ler_valor_monetario_opcional(valor: str, campo: str) -> float | None:
     if not texto:
         return None
     try:
-        numero = float(texto.replace(",", "."))
+        numero = parse_currency(texto)
     except ValueError as erro:
         raise ValueError(f"{campo} deve ser um valor monetario valido.") from erro
     if not math.isfinite(numero):
@@ -129,7 +129,13 @@ class VendasCorrecoesView(tk.Frame):
         box_pgto = tk.Frame(row2, bg=TEMA_ATUAL["surface"])
         box_pgto.pack(side="left", padx=(0, 10))
         tk.Label(box_pgto, text="Pagamento", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        cb_pgto = ttk.Combobox(box_pgto, textvariable=self._var_pagamento, values=["Todas"] + FORMAS_PGTO, state="readonly", width=16)
+        cb_pgto = ttk.Combobox(
+            box_pgto,
+            textvariable=self._var_pagamento,
+            values=("Todas", *PAYMENT_METHODS),
+            state="readonly",
+            width=16,
+        )
         cb_pgto.pack(fill="x", ipady=3)
 
         box_status = tk.Frame(row2, bg=TEMA_ATUAL["surface"])
@@ -664,7 +670,12 @@ class VendaDetailModal(tk.Toplevel):
         )
 
         tk.Label(card, text="Forma de Pagamento", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        ttk.Combobox(card, textvariable=var_pgto, values=FORMAS_PGTO, state="readonly").pack(fill="x", pady=(2, 8))
+        ttk.Combobox(
+            card,
+            textvariable=var_pgto,
+            values=PAYMENT_METHODS,
+            state="readonly",
+        ).pack(fill="x", pady=(2, 8))
 
         tk.Label(card, text="Detalhes (Bandeira/Parcelas)", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
         StyledEntry(card, textvariable=var_detalhe).pack(fill="x", ipady=4, pady=(2, 8))

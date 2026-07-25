@@ -417,43 +417,18 @@ class PainelEstoque(tk.Frame):
         self._renderizar_tabela()
 
     def _produtos_filtrados(self) -> list[dict]:
-        termo = self._var_busca.get().strip().lower()
-        status = self._var_status.get()
-        abc = self._var_abc.get()
-        categoria = self._var_categoria.get()
-        fornecedor = self._var_fornecedor.get()
-        ativos = self._var_ativos.get()
-        produtos = []
-        for produto in self._produtos:
-            cod_barras = str(produto.get("cod_barras") or "").lower()
-            if (
-                termo
-                and termo not in produto["nome"].lower()
-                and termo not in produto["codigo"].lower()
-                and termo not in cod_barras
-            ):
-                continue
-            if status != "Todos" and produto["status"] != status:
-                continue
-            if abc != "Todos" and (produto.get("curva_abc") or "") != abc:
-                continue
-            if categoria != "Todas" and (produto.get("categoria") or "") != categoria:
-                continue
-            if fornecedor != "Todos" and (produto.get("fornecedor") or "") != fornecedor:
-                continue
-            ativo = int(produto.get("ativo") or 0)
-            if ativos == "Ativos" and ativo != 1:
-                continue
-            if ativos == "Inativos" and ativo != 0:
-                continue
-            if self._var_sem_custo.get() and float(produto.get("custo_unitario") or 0) > 0:
-                continue
-            if self._var_sem_minimo.get() and int(produto.get("estoque_minimo") or 0) > 0:
-                continue
-            if self._var_sem_movimento.get() and produto.get("status") != "MORTO":
-                continue
-            produtos.append(produto)
-        return produtos
+        filtros = calculos.FiltrosEstoque(
+            termo=self._var_busca.get(),
+            status=self._var_status.get(),
+            curva_abc=self._var_abc.get(),
+            categoria=self._var_categoria.get(),
+            fornecedor=self._var_fornecedor.get(),
+            ativos=self._var_ativos.get(),
+            sem_custo=self._var_sem_custo.get(),
+            sem_minimo=self._var_sem_minimo.get(),
+            sem_movimento=self._var_sem_movimento.get(),
+        )
+        return calculos.filtrar_produtos(self._produtos, filtros)
 
     def _renderizar_tabela(self):
         produtos = self._produtos_filtrados()
