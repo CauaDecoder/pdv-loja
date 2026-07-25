@@ -9,10 +9,76 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 
 STATUS_ORDEM = {"CRITICO": 0, "ALERTA": 1, "MORTO": 2, "OK": 3, "INATIVO": 4}
+
+
+@dataclass(frozen=True)
+class FiltrosEstoque:
+    termo: str = ""
+    status: str = "Todos"
+    curva_abc: str = "Todos"
+    categoria: str = "Todas"
+    fornecedor: str = "Todos"
+    ativos: str = "Todos"
+    sem_custo: bool = False
+    sem_minimo: bool = False
+    sem_movimento: bool = False
+
+
+def filtrar_produtos(
+    produtos: list[dict],
+    filtros: FiltrosEstoque,
+) -> list[dict]:
+    """Aplica critérios de estoque sem depender do estado da interface."""
+    termo = filtros.termo.strip().lower()
+
+    def corresponde(produto: dict) -> bool:
+        campos_busca = (
+            produto.get("nome"),
+            produto.get("codigo"),
+            produto.get("cod_barras"),
+        )
+        if termo and not any(
+            termo in str(valor or "").lower()
+            for valor in campos_busca
+        ):
+            return False
+        if filtros.status != "Todos" and produto.get("status") != filtros.status:
+            return False
+        if (
+            filtros.curva_abc != "Todos"
+            and (produto.get("curva_abc") or "") != filtros.curva_abc
+        ):
+            return False
+        if (
+            filtros.categoria != "Todas"
+            and (produto.get("categoria") or "") != filtros.categoria
+        ):
+            return False
+        if (
+            filtros.fornecedor != "Todos"
+            and (produto.get("fornecedor") or "") != filtros.fornecedor
+        ):
+            return False
+
+        ativo = int(produto.get("ativo") or 0)
+        if filtros.ativos == "Ativos" and ativo != 1:
+            return False
+        if filtros.ativos == "Inativos" and ativo != 0:
+            return False
+        if filtros.sem_custo and float(produto.get("custo_unitario") or 0) > 0:
+            return False
+        if filtros.sem_minimo and int(produto.get("estoque_minimo") or 0) > 0:
+            return False
+        if filtros.sem_movimento and produto.get("status") != "MORTO":
+            return False
+        return True
+
+    return [produto for produto in produtos if corresponde(produto)]
 
 
 def _config_float(config: dict[str, str], chave: str, padrao: float) -> float:

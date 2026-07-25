@@ -122,6 +122,43 @@ def test_valores_a_custo_e_venda_sem_fallback():
     assert calculos.valor_a_custo({"estoque": 10, "custo_unitario": 0, "preco": 2}) == 0
 
 
+def test_filtros_estoque_combinam_busca_status_e_pendencias():
+    produtos = [
+        {
+            "nome": "Vela branca",
+            "codigo": "VELA-1",
+            "cod_barras": "789",
+            "status": "MORTO",
+            "curva_abc": "C",
+            "categoria": "Velas",
+            "fornecedor": "Fornecedor A",
+            "ativo": 1,
+            "custo_unitario": 0,
+            "estoque_minimo": 0,
+        },
+        {
+            "nome": "Terco",
+            "codigo": "TERCO-1",
+            "status": "OK",
+            "ativo": 1,
+            "custo_unitario": 5,
+            "estoque_minimo": 2,
+        },
+    ]
+
+    filtrados = calculos.filtrar_produtos(
+        produtos,
+        calculos.FiltrosEstoque(
+            termo="789",
+            sem_custo=True,
+            sem_minimo=True,
+            sem_movimento=True,
+        ),
+    )
+
+    assert filtrados == [produtos[0]]
+
+
 def test_venda_reduz_saldo_e_os_dois_valores_corretamente():
     temp, original = _usar_banco_temporario()
     try:

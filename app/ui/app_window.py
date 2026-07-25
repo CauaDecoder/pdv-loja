@@ -22,33 +22,18 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-"""
-Aplicacao principal do caixa da Loja da Basilica.
-
-Este modulo concentra a interface grafica em Tkinter e orquestra o fluxo
-principal do sistema:
-
-1. Inicializa a base local de dados e o estado do caixa.
-2. Monta as abas da interface de vendas, historico e estoque.
-3. Controla o carrinho, os pagamentos e o fechamento das vendas.
-4. Abre e encerra periodos, exporta relatorios e importa produtos.
-
-Dependencias de negocio:
-- `database.py`: persistencia, consultas e registro das vendas.
-- `relatorio.py`: geracao do arquivo final do periodo.
-- `estoque/painel.py`: painel visual de manutencao do estoque.
-
-Execucao: `python main.py`
-Requisitos: Python 3.10+, openpyxl
-"""
-
-import tkinter as tk
-from datetime import datetime
-from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
 
 import database as db
 import tema as theme
+from app.payments import (
+    CARD_BRANDS,
+    CARD_INSTALLMENTS,
+    MIXED_PAYMENT_METHODS,
+    PAYMENT_LABELS,
+    PaymentDetails,
+    parse_currency,
+    summarize_payment,
+)
 from app.services import backup_service, importacao_service, relatorios_service
 from app.ui.importacao_view import ImportacaoGuidedView
 from app.ui.relatorios_view import RelatoriosView
@@ -77,16 +62,6 @@ from tema import (
     moeda,
     obter_nome_tema_atual,
 )
-BANDEIRAS_DEBITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
-BANDEIRAS_CREDITO = ["Visa", "Mastercard", "Elo", "American Express", "Hipercard"]
-FORMAS_PGTO_MISTO = ("Dinheiro", "Debito", "Credito", "Pix")
-ROTULOS_PGTO = {
-    "Dinheiro": "Dinheiro",
-    "Debito": "Débito",
-    "Credito": "Crédito",
-    "Pix": "Pix",
-}
-PARCELAS_CREDITO = [str(i) for i in range(1, 13)]
 PLACEHOLDER_BUSCA = "Escaneie o código ou busque pelo nome"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RELATORIOS_DIR = PROJECT_ROOT / "relatorios"
@@ -1155,22 +1130,18 @@ class CaixaApp(tk.Tk):
 
     def _resumo_pagamento(self) -> str:
         """Gera o texto resumido exibido na lateral e no historico."""
-        if not self._pagamento:
-            return "Nao selecionado"
-        if self._pagamento in ("Debito", "Credito") and self._pagamento_detalhe:
-            return f"{self._pagamento} | {self._pagamento_detalhe}"
-        if self._pagamento == "Dinheiro" and self._valor_recebido is not None and self._troco is not None:
-            return f"Dinheiro | Recebido {moeda(self._valor_recebido)} | Troco {moeda(self._troco)}"
-        if self._pagamento == "Mais de uma forma" and self._pagamento_detalhe:
-            return self._pagamento_detalhe
-        return self._pagamento
+        return summarize_payment(
+            self._pagamento,
+            PaymentDetails(
+                detail=self._pagamento_detalhe,
+                received=self._valor_recebido,
+                change=self._troco,
+            ),
+        )
 
     def _parse_moeda(self, texto: str) -> float:
         """Interpreta textos como `10`, `10,50` ou `R$ 10,50`."""
-        texto = texto.strip().replace("R$", "").replace(" ", "")
-        if "," in texto:
-            texto = texto.replace(".", "").replace(",", ".")
-        return float(texto)
+        return parse_currency(texto)
 
     def _coletar_dinheiro(self) -> bool:
         """Abre um dialog para valor recebido e calculo de troco."""
@@ -1273,7 +1244,10 @@ class CaixaApp(tk.Tk):
             anchor="w", pady=(4, 10)
         )
 
-        vars_pgto = {forma: tk.BooleanVar(value=False) for forma in FORMAS_PGTO_MISTO}
+        vars_pgto = {
+            forma: tk.BooleanVar(value=False)
+            for forma in MIXED_PAYMENT_METHODS
+        }
         detalhes_cartao = {}
         total_venda = self._total_carrinho()
 
@@ -1281,12 +1255,12 @@ class CaixaApp(tk.Tk):
             info = detalhes_cartao.get(forma, {})
             if forma == "Debito":
                 bandeira_var = info.get("bandeira_var")
-                bandeira = bandeira_var.get() if bandeira_var else BANDEIRAS_DEBITO[0]
+                bandeira = bandeira_var.get() if bandeira_var else CARD_BRANDS[0]
                 return f"{bandeira}"
             if forma == "Credito":
                 bandeira_var = info.get("bandeira_var")
                 parcela_var = info.get("parcelas_var")
-                bandeira = bandeira_var.get() if bandeira_var else BANDEIRAS_CREDITO[0]
+                bandeira = bandeira_var.get() if bandeira_var else CARD_BRANDS[0]
                 parcelas = parcela_var.get() if parcela_var else "1"
                 return f"{bandeira} | {parcelas}x"
             if forma == "Dinheiro":
@@ -1307,13 +1281,13 @@ class CaixaApp(tk.Tk):
             else:
                 info["card"].pack_forget()
 
-        for forma in FORMAS_PGTO_MISTO:
+        for forma in MIXED_PAYMENT_METHODS:
             linha = Card(frame, padding=10)
             linha.pack(fill="x", pady=(0, 8))
 
             check = tk.Checkbutton(
                 linha,
-                text=ROTULOS_PGTO[forma],
+                text=PAYMENT_LABELS[forma],
                 variable=vars_pgto[forma],
                 indicatoron=False,
                 bg=tema["surface_2"],
@@ -1335,7 +1309,7 @@ class CaixaApp(tk.Tk):
                 detalhe_card = tk.Frame(linha, bg=tema["surface"], padx=10, pady=8)
                 detalhes_cartao[forma] = {"card": detalhe_card}
 
-                bandeira_var = tk.StringVar(value=(BANDEIRAS_DEBITO[0] if forma == "Debito" else BANDEIRAS_CREDITO[0]))
+                bandeira_var = tk.StringVar(value=CARD_BRANDS[0])
                 detalhes_cartao[forma]["bandeira_var"] = bandeira_var
                 tk.Label(
                     detalhe_card,
@@ -1347,7 +1321,7 @@ class CaixaApp(tk.Tk):
                 self._criar_grade_opcoes(
                     detalhe_card,
                     bandeira_var,
-                    BANDEIRAS_DEBITO if forma == "Debito" else BANDEIRAS_CREDITO,
+                    CARD_BRANDS,
                     colunas=3,
                 )
 
@@ -1364,7 +1338,7 @@ class CaixaApp(tk.Tk):
                     self._criar_grade_opcoes(
                         detalhe_card,
                         parcela_var,
-                        PARCELAS_CREDITO,
+                        CARD_INSTALLMENTS,
                         colunas=6,
                         sufixo="x",
                     )
@@ -1531,7 +1505,6 @@ class CaixaApp(tk.Tk):
 
     def _coletar_bandeira(self, tipo: str) -> bool:
         """Solicita bandeira e, no credito, quantidade de parcelas."""
-        bandeiras = BANDEIRAS_DEBITO if tipo == "Debito" else BANDEIRAS_CREDITO
         eh_debito = tipo == "Debito"
         dialog = BaseModal(
             self,
@@ -1544,7 +1517,7 @@ class CaixaApp(tk.Tk):
         frame = Card(dialog.body_frame, padding=16)
         frame.pack(fill="both", expand=True)
 
-        escolhida = tk.StringVar(value=bandeiras[0])
+        escolhida = tk.StringVar(value=CARD_BRANDS[0])
         tk.Label(
             frame,
             text="Bandeira",
@@ -1552,7 +1525,7 @@ class CaixaApp(tk.Tk):
             fg=theme.MUTED,
             font=FONTES["label_sm"],
         ).pack(anchor="w")
-        self._criar_grade_opcoes(frame, escolhida, bandeiras, colunas=2)
+        self._criar_grade_opcoes(frame, escolhida, CARD_BRANDS, colunas=2)
 
         parcela_var = tk.StringVar(value="1")
         if not eh_debito:
@@ -1563,7 +1536,13 @@ class CaixaApp(tk.Tk):
                 fg=theme.MUTED,
                 font=FONTES["label_sm"],
             ).pack(anchor="w", pady=(12, 6))
-            self._criar_grade_opcoes(frame, parcela_var, PARCELAS_CREDITO, colunas=4, sufixo="x")
+            self._criar_grade_opcoes(
+                frame,
+                parcela_var,
+                CARD_INSTALLMENTS,
+                colunas=4,
+                sufixo="x",
+            )
 
         resultado = {"ok": False}
 
@@ -1950,7 +1929,7 @@ class CaixaApp(tk.Tk):
             if venda_base["pagamento"] == "Credito" and len(partes) > 1 and partes[1].endswith("x"):
                 parcelas_var.set(partes[1].replace("x", ""))
         elif venda_base["pagamento"] in ("Debito", "Credito"):
-            bandeira_var.set(BANDEIRAS_CREDITO[0])
+            bandeira_var.set(CARD_BRANDS[0])
         elif venda_base["pagamento"] == "Dinheiro":
             if venda_base["valor_recebido"] is not None:
                 valor_recebido_var.set(moeda(float(venda_base["valor_recebido"])))
@@ -1973,11 +1952,25 @@ class CaixaApp(tk.Tk):
         dinheiro_frame = tk.Frame(detalhe_card, bg=theme.BRANCO)
 
         tk.Label(bandeira_frame, text="Bandeira", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
-        bandeira_box = ttk.Combobox(bandeira_frame, textvariable=bandeira_var, values=BANDEIRAS_CREDITO, state="readonly", width=18, font=("Segoe UI", 11))
+        bandeira_box = ttk.Combobox(
+            bandeira_frame,
+            textvariable=bandeira_var,
+            values=CARD_BRANDS,
+            state="readonly",
+            width=18,
+            font=("Segoe UI", 11),
+        )
         bandeira_box.grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
         tk.Label(parcelas_frame, text="Parcelas", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
-        parcelas_box = ttk.Combobox(parcelas_frame, textvariable=parcelas_var, values=PARCELAS_CREDITO, state="readonly", width=10, font=("Segoe UI", 11))
+        parcelas_box = ttk.Combobox(
+            parcelas_frame,
+            textvariable=parcelas_var,
+            values=CARD_INSTALLMENTS,
+            state="readonly",
+            width=10,
+            font=("Segoe UI", 11),
+        )
         parcelas_box.grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
         tk.Label(dinheiro_frame, text="Valor recebido", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
@@ -2001,12 +1994,12 @@ class CaixaApp(tk.Tk):
             if tipo == "Debito":
                 bandeira_frame.grid(row=2, column=0, sticky="ew")
                 if not bandeira_var.get().strip():
-                    bandeira_var.set(BANDEIRAS_DEBITO[0])
+                    bandeira_var.set(CARD_BRANDS[0])
             elif tipo == "Credito":
                 bandeira_frame.grid(row=2, column=0, sticky="ew")
                 parcelas_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
                 if not bandeira_var.get().strip():
-                    bandeira_var.set(BANDEIRAS_CREDITO[0])
+                    bandeira_var.set(CARD_BRANDS[0])
                 if not parcelas_var.get().strip():
                     parcelas_var.set("1")
             elif tipo == "Dinheiro":

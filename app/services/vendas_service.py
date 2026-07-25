@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
+from app.payments import PAYMENT_METHODS
 from database import _registrar_movimentacao_estoque, get_conn, registrar_venda
 
 STATUS_VALIDOS = {"valid", "corrected", "cancelled"}
@@ -18,13 +19,7 @@ ACOES_CORRECAO = [
     "remove_item",
     "cancel_sale",
 ]
-FORMAS_PAGAMENTO = {
-    "Debito",
-    "Credito",
-    "Pix",
-    "Dinheiro",
-    "Mais de uma forma",
-}
+FORMAS_PAGAMENTO = set(PAYMENT_METHODS)
 
 
 def alterar_pagamento_venda(
@@ -47,29 +42,13 @@ def alterar_pagamento_venda(
     valor_recebido = _normalizar_valor_pagamento(valor_recebido, "Valor recebido")
     troco = _normalizar_valor_pagamento(troco, "Troco")
 
-    with get_conn() as conn:
-        linhas = conn.execute(
-            """
-            SELECT *
-            FROM vendas
-            WHERE periodo_id = ? AND num_venda = ?
-            ORDER BY id
-            """,
-            (periodo_id, num_venda),
-        ).fetchall()
-        if not linhas:
-            raise ValueError("Venda nao encontrada.")
-
-        antes = _pagamento_para_contrato(linhas[0])
-
+    antes: dict[str, Any] = {}
     depois = {
         "method": pagamento,
         "detail": pagamento_detalhe,
         "received": valor_recebido,
         "change": troco,
     }
-    if antes == depois:
-        raise ValueError("O novo pagamento deve ser diferente do atual.")
 
     with _transacao_correcao(
         periodo_id=periodo_id,
@@ -81,6 +60,20 @@ def alterar_pagamento_venda(
         novo_status="corrected",
         observacao=observacao,
     ) as conn:
+        linha = conn.execute(
+            """
+            SELECT *
+            FROM vendas
+            WHERE periodo_id = ? AND num_venda = ?
+            ORDER BY id
+            LIMIT 1
+            """,
+            (periodo_id, num_venda),
+        ).fetchone()
+        antes.update(_pagamento_para_contrato(linha))
+        if antes == depois:
+            raise ValueError("O novo pagamento deve ser diferente do atual.")
+
         conn.execute(
             """
             UPDATE vendas
@@ -241,24 +234,9 @@ def cancelar_venda(
     criado_em: str | None = None,
 ) -> dict[str, Any]:
     """Executa Cancelar venda e devolve ao estoque os itens vinculados."""
-    detalhe_atual = obter_detalhe_venda(periodo_id, num_venda)
-    if detalhe_atual is None:
-        raise ValueError("Venda no caixa nao encontrada.")
-
     devolucoes: list[dict[str, int]] = []
-    quantidades_por_produto: dict[int, int] = {}
-    for item in detalhe_atual["items"]:
-        produto_id = item["product_id"]
-        if produto_id is None:
-            continue
-        quantidades_por_produto[produto_id] = (
-            quantidades_por_produto.get(produto_id, 0) + item["quantity"]
-        )
-    for produto_id, quantidade in quantidades_por_produto.items():
-        devolucoes.append({"product_id": produto_id, "quantity": quantidade})
-
-    antes = {"status": detalhe_atual["status"]}
-    depois = {"status": "cancelled", "stock_returned": devolucoes}
+    antes: dict[str, Any] = {}
+    depois: dict[str, Any] = {}
     momento_cancelamento = datetime.now()
     data = momento_cancelamento.strftime("%d/%m/%Y")
     hora = momento_cancelamento.strftime("%H:%M")
@@ -274,6 +252,26 @@ def cancelar_venda(
         observacao=observacao,
         criado_em=criado_em,
     ) as conn:
+        linhas = conn.execute(
+            """
+            SELECT produto_id, SUM(quantidade) AS quantidade, MAX(status) AS status
+            FROM vendas
+            WHERE periodo_id = ? AND num_venda = ?
+            GROUP BY produto_id
+            """,
+            (periodo_id, num_venda),
+        ).fetchall()
+        antes["status"] = _normalizar_status(linhas[0]["status"])
+        devolucoes.extend(
+            {
+                "product_id": int(linha["produto_id"]),
+                "quantity": int(linha["quantidade"]),
+            }
+            for linha in linhas
+            if linha["produto_id"] is not None
+        )
+        depois.update({"status": "cancelled", "stock_returned": devolucoes})
+
         for devolucao in devolucoes:
             produto_id = devolucao["product_id"]
             _registrar_movimentacao_estoque(
