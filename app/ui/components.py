@@ -37,16 +37,16 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
     style.configure(
         "TNotebook.Tab",
         font=FONTES["botao"],
-        padding=(18, 11),
+        padding=(16, 10),
         background=tema["surface_2"],
-        foreground=tema["text"],
+        foreground=tema["text_muted"],
         borderwidth=0,
     )
     style.map(
         "TNotebook.Tab",
         background=[("selected", tema["surface"]), ("active", tema["surface_hover"])],
-        foreground=[("selected", tema["text"]), ("active", tema["text"])],
-        padding=[("selected", (18, 11)), ("active", (18, 11))],
+        foreground=[("selected", tema["primary"]), ("active", tema["text"])],
+        padding=[("selected", (16, 10)), ("active", (16, 10))],
     )
 
     style.configure(
@@ -126,6 +126,7 @@ _BACKGROUND_COLOR_KEYS = (
     "surface_2",
     "surface_3",
     "surface_hover",
+    "shell",
     "border",
     "border_soft",
     "primary",
@@ -148,6 +149,9 @@ _FOREGROUND_COLOR_KEYS = (
     "text_muted",
     "text_on_primary",
     "text_on_dark",
+    "shell_text",
+    "shell_muted",
+    "shell",
     "primary",
     "primary_hover",
     "gold",
@@ -457,6 +461,41 @@ class Card(tk.Frame):
         )
 
 
+class KpiCard(tk.Frame):
+    """Resumo numérico compacto para leitura rápida no Command Center."""
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        label: str,
+        value: str,
+        *,
+        tone: str = "default",
+        detail: str = "",
+    ):
+        tema = obter_tema_atual()
+        tones = {
+            "default": (tema["surface_2"], tema["text"]),
+            "primary": (tema["primary_soft"], tema["primary"]),
+            "warning": (tema["warning_soft"], tema["warning"]),
+            "danger": (tema["danger_soft"], tema["danger"]),
+        }
+        bg, value_fg = tones.get(tone, tones["default"])
+        super().__init__(
+            parent,
+            bg=bg,
+            highlightthickness=1,
+            highlightbackground=tema["border_soft"],
+            padx=14,
+            pady=11,
+        )
+        tk.Label(self, text=label.upper(), bg=bg, fg=tema["text_muted"], font=FONTES["label_sm"]).pack(anchor="w")
+        self.value_label = tk.Label(self, text=value, bg=bg, fg=value_fg, font=FONTES["numero_card"])
+        self.value_label.pack(anchor="w", pady=(3, 0))
+        if detail:
+            tk.Label(self, text=detail, bg=bg, fg=tema["text_muted"], font=FONTES["corpo"]).pack(anchor="w", pady=(3, 0))
+
+
 class Panel(Card):
     """Painel de seção secundário."""
 
@@ -529,6 +568,8 @@ class PageHeader(tk.Frame):
             tk.Label(left, text=subtitle, bg=tema["bg"], fg=tema["text_muted"], font=FONTES["corpo"]).pack(
                 anchor="w", pady=(2, 0)
             )
+
+        tk.Frame(left, bg=tema["primary"], height=2, width=34).pack(anchor="w", pady=(8, 0))
 
         if action_text:
             action_button(
@@ -879,5 +920,3 @@ def confirmar_acao_sensivel(
         badge_type=badge_type,
         require_input_text=require_input_text,
     )
-
-

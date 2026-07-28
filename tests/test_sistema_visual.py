@@ -20,6 +20,7 @@ class SistemaVisualTest(unittest.TestCase):
         # Verificação das chaves essenciais na Variante A
         chaves_obrigatorias = [
             "bg", "surface", "surface_2", "surface_3", "text", "text_muted",
+            "shell", "shell_text", "shell_muted",
             "border", "border_soft", "primary", "primary_soft", "gold", "gold_soft",
             "danger", "danger_soft", "warning", "warning_soft", "info", "info_soft",
             "focus_ring"

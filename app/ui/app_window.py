@@ -228,7 +228,7 @@ class CaixaApp(tk.Tk):
         """Configura a janela, inicializa o estado e monta a interface."""
         super().__init__()
         self.title("Caixa - Loja da Basilica")
-        self.geometry("1180x720")
+        self.geometry("1366x768")
         self.minsize(760, 560)
         self.configure(bg=theme.TEMA_ATUAL["fundo"])
 
@@ -296,7 +296,7 @@ class CaixaApp(tk.Tk):
         self._body = tk.Frame(self._aba_venda, bg=theme.TEMA_ATUAL["fundo"])
         self._body.pack(fill="both", expand=True)
         self._body.columnconfigure(0, weight=1)
-        self._body.columnconfigure(1, weight=0, minsize=300)
+        self._body.columnconfigure(1, weight=0, minsize=336)
         self._body.rowconfigure(0, weight=1)
 
         self._build_left(self._body)
@@ -338,37 +338,38 @@ class CaixaApp(tk.Tk):
 
     def _build_topbar(self):
         """Cria o cabecalho com titulo, data, horario e numero da venda (Variante A)."""
-        bar = tk.Frame(self, bg="#171614", height=74)
+        tema = theme.TEMA_ATUAL
+        bar = tk.Frame(self, bg=tema["shell"], height=74)
         self._topbar = bar
         bar.pack(fill="x")
         bar.pack_propagate(False)
 
-        left = tk.Frame(bar, bg="#171614")
+        left = tk.Frame(bar, bg=tema["shell"])
         self._topbar_left = left
         left.pack(side="left", padx=18, pady=12)
-        self._lbl_titulo = tk.Label(left, text="Loja da Basilica", bg="#171614", fg="#F7F2E7", font=("Segoe UI", 16, "bold"))
+        self._lbl_titulo = tk.Label(left, text="Loja da Basílica", bg=tema["shell"], fg=tema["shell_text"], font=("Segoe UI", 16, "bold"))
         self._lbl_titulo.pack(anchor="w")
         self._lbl_subtitulo = tk.Label(
             left,
             text="Caixa rápido para a operação diária da loja",
-            bg="#171614",
-            fg="#C9C0B0",
+            bg=tema["shell"],
+            fg=tema["shell_muted"],
             font=("Segoe UI", 10),
         )
         self._lbl_subtitulo.pack(anchor="w", pady=(2, 0))
 
-        right = tk.Frame(bar, bg="#171614")
+        right = tk.Frame(bar, bg=tema["shell"])
         self._topbar_right = right
         right.pack(side="right", padx=18, pady=12)
-        self._lbl_relogio = tk.Label(right, text="--:--", bg="#171614", fg="#F7F2E7", font=("Segoe UI", 11, "bold"))
+        self._lbl_relogio = tk.Label(right, text="--:--", bg=tema["shell"], fg=tema["shell_text"], font=("Segoe UI", 11, "bold"))
         self._lbl_relogio.pack(anchor="e")
-        self._lbl_data = tk.Label(right, text=self._data_hoje, bg="#171614", fg="#C9C0B0", font=("Segoe UI", 9))
+        self._lbl_data = tk.Label(right, text=self._data_hoje, bg=tema["shell"], fg=tema["shell_muted"], font=("Segoe UI", 9))
         self._lbl_data.pack(anchor="e")
         self._lbl_venda_num = tk.Label(
             right,
             text="",
-            bg="#D5A33B",
-            fg="#171614",
+            bg=tema["gold"],
+            fg=tema["shell"],
             font=("Segoe UI", 10, "bold"),
             padx=10,
             pady=5,
@@ -391,10 +392,11 @@ class CaixaApp(tk.Tk):
         pad = tk.Frame(left, bg=theme.BRANCO)
         pad.pack(fill="both", expand=True, padx=18, pady=16)
 
-        hero = Card(pad, padding=14, bg=theme.FUNDO2)
+        hero = Card(pad, padding=16, bg=theme.TEMA_ATUAL["primary_soft"])
         hero.pack(fill="x", pady=(0, 12))
-        tk.Label(hero, text="Registro de venda", bg=theme.FUNDO2, fg=theme.TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        tk.Label(hero, text="Busque pelo nome, código interno ou código de barras para montar a venda.", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 9), wraplength=560, justify="left").pack(anchor="w", pady=(4, 0))
+        tk.Label(hero, text="NOVA VENDA", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(hero, text="Pronto para registrar", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(3, 0))
+        tk.Label(hero, text="Escaneie um código ou busque pelo nome. O foco permanece aqui para a próxima venda.", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.MUTED, font=("Segoe UI", 9), wraplength=560, justify="left").pack(anchor="w", pady=(4, 0))
 
         search_card = Card(pad, padding=12)
         search_card.pack(fill="x", pady=(0, 12))
@@ -494,12 +496,12 @@ class CaixaApp(tk.Tk):
         self._right_canvas.bind("<Configure>", self._ajustar_largura_lateral)
         self._right_canvas.bind("<MouseWheel>", self._rolar_painel_lateral)
 
-        self._card_status = Card(pad, padding=16, bg=theme.VERDE_ESC)
+        self._card_status = Card(pad, padding=16, bg=theme.TEMA_ATUAL["primary_soft"])
         self._card_status.pack(fill="x", pady=(0, 12))
-        tk.Label(self._card_status, text="Próximo passo", bg=theme.VERDE_ESC, fg="#CFEBDD", font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self._lbl_status_fluxo = tk.Label(self._card_status, text="", bg=theme.VERDE_ESC, fg=theme.BRANCO, font=("Segoe UI", 13, "bold"), wraplength=230, justify="left")
+        tk.Label(self._card_status, text="STATUS DA VENDA", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self._lbl_status_fluxo = tk.Label(self._card_status, text="", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEXTO, font=("Segoe UI", 13, "bold"), wraplength=270, justify="left")
         self._lbl_status_fluxo.pack(anchor="w", pady=(8, 4))
-        self._lbl_status_aux = tk.Label(self._card_status, text="", bg=theme.VERDE_ESC, fg="#DDF4EA", font=("Segoe UI", 9), wraplength=230, justify="left")
+        self._lbl_status_aux = tk.Label(self._card_status, text="", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.MUTED, font=("Segoe UI", 9), wraplength=270, justify="left")
         self._lbl_status_aux.pack(anchor="w")
 
         card_responsavel = Card(pad, padding=14)
@@ -2084,7 +2086,7 @@ class CaixaApp(tk.Tk):
             self._right_panel.grid(row=2, column=0, sticky="ew")
         else:
             self._body.columnconfigure(0, weight=1)
-            self._body.columnconfigure(1, weight=0, minsize=300)
+            self._body.columnconfigure(1, weight=0, minsize=336)
             self._body.rowconfigure(0, weight=1)
             self._body.rowconfigure(1, weight=0)
             self._body.rowconfigure(2, weight=0, minsize=0)

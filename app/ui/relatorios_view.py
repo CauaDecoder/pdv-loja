@@ -18,6 +18,7 @@ from app.ui.components import (
     Card,
     DataTable,
     EmptyState,
+    KpiCard,
     PageHeader,
     SectionHeader,
     StatusBadge,
@@ -94,30 +95,23 @@ class RelatoriosView(tk.Frame):
             "Movimentação financeira real (apenas vendas válidas e corrigidas).",
         ).pack(anchor="w", fill="x", pady=(0, 12))
 
-        # KPI Stats Header
+        # Faixa de leitura rápida: os detalhes ficam na tabela logo abaixo.
         self._stats_frame = tk.Frame(self._card_financeiro, bg=TEMA_ATUAL["surface"])
         self._stats_frame.pack(fill="x", pady=(0, 12))
+        for column in range(3):
+            self._stats_frame.columnconfigure(column, weight=1, uniform="kpi")
 
-        # Card Total Líquido
-        box_total = tk.Frame(self._stats_frame, bg=TEMA_ATUAL["surface_2"], padx=14, pady=10)
-        box_total.pack(side="left", padx=(0, 12))
-        tk.Label(box_total, text="MOVIMENTAÇÃO LÍQUIDA", bg=TEMA_ATUAL["surface_2"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        self._lbl_total_liquido = tk.Label(box_total, text="R$ 0,00", bg=TEMA_ATUAL["surface_2"], fg=TEMA_ATUAL["primary"], font=FONTES["titulo"])
-        self._lbl_total_liquido.pack(anchor="w", pady=(2, 0))
+        kpi_total = KpiCard(self._stats_frame, "Movimentação líquida", "R$ 0,00", tone="primary")
+        kpi_total.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self._lbl_total_liquido = kpi_total.value_label
 
-        # Card Vendas Válidas
-        box_validas = tk.Frame(self._stats_frame, bg=TEMA_ATUAL["surface_2"], padx=14, pady=10)
-        box_validas.pack(side="left", padx=(0, 12))
-        tk.Label(box_validas, text="VENDAS VÁLIDAS", bg=TEMA_ATUAL["surface_2"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        self._lbl_qtd_validas = tk.Label(box_validas, text="0 vendas", bg=TEMA_ATUAL["surface_2"], fg=TEMA_ATUAL["texto"], font=FONTES["subtitulo"])
-        self._lbl_qtd_validas.pack(anchor="w", pady=(2, 0))
+        kpi_validas = KpiCard(self._stats_frame, "Vendas válidas", "0 vendas")
+        kpi_validas.grid(row=0, column=1, sticky="ew", padx=4)
+        self._lbl_qtd_validas = kpi_validas.value_label
 
-        # Card Vendas Corrigidas
-        box_corrigidas = tk.Frame(self._stats_frame, bg=TEMA_ATUAL["surface_2"], padx=14, pady=10)
-        box_corrigidas.pack(side="left")
-        tk.Label(box_corrigidas, text="VENDAS CORRIGIDAS", bg=TEMA_ATUAL["surface_2"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        self._lbl_qtd_corrigidas = tk.Label(box_corrigidas, text="0 correções", bg=TEMA_ATUAL["surface_2"], fg=TEMA_ATUAL["warning"], font=FONTES["subtitulo"])
-        self._lbl_qtd_corrigidas.pack(anchor="w", pady=(2, 0))
+        kpi_corrigidas = KpiCard(self._stats_frame, "Vendas corrigidas", "0 correções", tone="warning")
+        kpi_corrigidas.grid(row=0, column=2, sticky="ew", padx=(8, 0))
+        self._lbl_qtd_corrigidas = kpi_corrigidas.value_label
 
         # Tabela de Conciliação por Forma de Pagamento
         tk.Label(self._card_financeiro, text="Conciliação por Forma de Pagamento", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto"], font=FONTES["corpo_bold"]).pack(anchor="w", pady=(4, 6))

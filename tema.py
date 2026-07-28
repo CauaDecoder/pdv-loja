@@ -10,6 +10,11 @@ TEMA_CLARO = {
     "surface_2": "#EEF2F0",
     "surface_3": "#FAFCFB",
     "surface_hover": "#E4EAE6",
+    # Casca do aplicativo: um tom mais profundo cria separação sem competir
+    # com a área operacional clara.
+    "shell": "#18342D",
+    "shell_text": "#F7F5EF",
+    "shell_muted": "#C7D4CD",
     # Cores de texto
     "text": "#17201C",
     "text_muted": "#64706A",
@@ -63,6 +68,9 @@ TEMA_ESCURO = {
     "surface_2": "#252B2E",
     "surface_3": "#171A1C",
     "surface_hover": "#2C3335",
+    "shell": "#0C1714",
+    "shell_text": "#F5F2EA",
+    "shell_muted": "#B7C4BD",
     # Cores de texto
     "text": "#F5F2EA",
     "text_muted": "#ADB2AD",
@@ -306,4 +314,3 @@ PGTO_FG = {
 
 def moeda(valor: float) -> str:
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
