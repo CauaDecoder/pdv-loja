@@ -17,7 +17,6 @@ from app.services import relatorios_service
 from app.ui.components import (
     Card,
     DataTable,
-    EmptyState,
     KpiCard,
     PageHeader,
     SectionHeader,
@@ -91,8 +90,8 @@ class RelatoriosView(tk.Frame):
 
         SectionHeader(
             self._card_financeiro,
-            "Fechamento Financeiro Líquido do Período",
-            "Movimentação financeira real (apenas vendas válidas e corrigidas).",
+            "Fechamento do periodo",
+            "Vendas canceladas nao entram na movimentacao financeira, mas aparecem abaixo para rastreabilidade.",
         ).pack(anchor="w", fill="x", pady=(0, 12))
 
         # Faixa de leitura rápida: os detalhes ficam na tabela logo abaixo.
@@ -101,17 +100,17 @@ class RelatoriosView(tk.Frame):
         for column in range(3):
             self._stats_frame.columnconfigure(column, weight=1, uniform="kpi")
 
-        kpi_total = KpiCard(self._stats_frame, "Movimentação líquida", "R$ 0,00", tone="primary")
+        kpi_total = KpiCard(self._stats_frame, "Financeiro valido", "R$ 0,00", tone="primary")
         kpi_total.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self._lbl_total_liquido = kpi_total.value_label
 
-        kpi_validas = KpiCard(self._stats_frame, "Vendas válidas", "0 vendas")
-        kpi_validas.grid(row=0, column=1, sticky="ew", padx=4)
-        self._lbl_qtd_validas = kpi_validas.value_label
-
-        kpi_corrigidas = KpiCard(self._stats_frame, "Vendas corrigidas", "0 correções", tone="warning")
-        kpi_corrigidas.grid(row=0, column=2, sticky="ew", padx=(8, 0))
+        kpi_corrigidas = KpiCard(self._stats_frame, "Correções", "0")
+        kpi_corrigidas.grid(row=0, column=1, sticky="ew", padx=4)
         self._lbl_qtd_corrigidas = kpi_corrigidas.value_label
+
+        kpi_canceladas = KpiCard(self._stats_frame, "Canceladas separadas", "0")
+        kpi_canceladas.grid(row=0, column=2, sticky="ew", padx=(8, 0))
+        self._lbl_qtd_canceladas = kpi_canceladas.value_label
 
         # Tabela de Conciliação por Forma de Pagamento
         tk.Label(self._card_financeiro, text="Conciliação por Forma de Pagamento", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto"], font=FONTES["corpo_bold"]).pack(anchor="w", pady=(4, 6))
@@ -125,54 +124,19 @@ class RelatoriosView(tk.Frame):
         self._tree_pgto.pack(fill="x")
 
     def _build_card_vendas_canceladas(self):
-        self._card_canceladas = Card(self._content, padding=16)
+        self._card_canceladas = tk.Frame(self._content, bg=TEMA_ATUAL["danger_soft"], padx=16, pady=16)
         self._card_canceladas.pack(fill="x", pady=(0, 12))
 
-        SectionHeader(
-            self._card_canceladas,
-            "Vendas Canceladas (Rastreabilidade & Auditoria)",
-            "Vendas anuladas do período mantidas exclusivamente para auditoria.",
-        ).pack(anchor="w", fill="x", pady=(0, 6))
-
-        # Banner informativo
-        banner = tk.Frame(self._card_canceladas, bg=TEMA_ATUAL["surface_2"], padx=12, pady=8)
-        banner.pack(fill="x", pady=(0, 10))
         tk.Label(
-            banner,
-            text="⚠️ Importante: Vendas canceladas NÃO integram a receita líquida nem entram na movimentação financeira do período acima.",
-            bg=TEMA_ATUAL["surface_2"],
-            fg=TEMA_ATUAL["danger"],
-            font=FONTES["corpo_bold"],
-        ).pack(anchor="w")
-
-        colunas = ("venda", "data_hora", "responsavel", "pagamento", "total", "status")
-        titulos = {
-            "venda": "Venda",
-            "data_hora": "Data / Hora",
-            "responsavel": "Responsável",
-            "pagamento": "Forma Original",
-            "total": "Valor Anulado",
-            "status": "Status",
-        }
-        larguras = {
-            "venda": 90,
-            "data_hora": 140,
-            "responsavel": 160,
-            "pagamento": 200,
-            "total": 120,
-            "status": 110,
-        }
-
-        self._tree_canceladas = DataTable(self._card_canceladas, colunas, titulos, larguras, height=4)
-        self._tree_canceladas.column("responsavel", anchor="w")
-        self._tree_canceladas.column("pagamento", anchor="w")
-        self._tree_canceladas.pack(fill="x")
-
-        self._empty_canceladas = EmptyState(
             self._card_canceladas,
-            "Nenhuma venda cancelada",
-            "Não houve cancelamentos de vendas registrados neste período.",
-        )
+            text="Vendas canceladas",
+            bg=TEMA_ATUAL["danger_soft"],
+            fg=TEMA_ATUAL["danger"],
+            font=FONTES["corpo_bold"]
+        ).pack(anchor="w", pady=(0, 8))
+
+        self._container_canceladas = tk.Frame(self._card_canceladas, bg=TEMA_ATUAL["danger_soft"])
+        self._container_canceladas.pack(fill="x")
 
     def _build_card_exportacoes(self):
         card_exp = Card(self._content, padding=16)
@@ -226,12 +190,12 @@ class RelatoriosView(tk.Frame):
 
         # Atualiza KPIs
         tot_liquido = float(mov.get("total", 0.0))
-        qtd_validas = int(mov.get("transactions", 0))
         qtd_corrigidas = int(mov.get("corrected_transactions", 0))
+        qtd_canceladas = len(dados.get("cancelled_sales", []))
 
         self._lbl_total_liquido.config(text=moeda(tot_liquido))
-        self._lbl_qtd_validas.config(text=f"{qtd_validas} vendas")
-        self._lbl_qtd_corrigidas.config(text=f"{qtd_corrigidas} correções")
+        self._lbl_qtd_corrigidas.config(text=str(qtd_corrigidas))
+        self._lbl_qtd_canceladas.config(text=str(qtd_canceladas))
 
         # Preenche Tabela de Conciliação por Forma de Pagamento
         for item in self._tree_pgto.get_children():
@@ -253,31 +217,29 @@ class RelatoriosView(tk.Frame):
                 )
 
         # Preenche Tabela de Vendas Canceladas
-        for item in self._tree_canceladas.get_children():
-            self._tree_canceladas.delete(item)
+        for widget in self._container_canceladas.winfo_children():
+            widget.destroy()
 
         canceladas = dados.get("cancelled_sales", [])
         if not canceladas:
-            self._tree_canceladas.pack_forget()
-            self._empty_canceladas.pack(fill="x", pady=6)
+            self._card_canceladas.pack_forget()
         else:
-            self._empty_canceladas.pack_forget()
-            self._tree_canceladas.pack(fill="x")
+            self._card_canceladas.pack(fill="x", pady=(0, 12))
             for c in canceladas:
                 sold_at = c.get("sold_at", {})
-                dt_str = f"{sold_at.get('date', '')} {sold_at.get('time', '')}".strip()
-                self._tree_canceladas.insert(
-                    "",
-                    "end",
-                    values=(
-                        f"#{c.get('sale_number', 0):03d}",
-                        dt_str,
-                        c.get("responsible", ""),
-                        c.get("payment_summary", ""),
-                        moeda(float(c.get("total", 0))),
-                        "CANCELADA",
-                    ),
-                )
+                dt_str = f"{sold_at.get('time', '')}".strip()
+                n = c.get('sale_number', 0)
+                v = moeda(float(c.get("total", 0)))
+                resp = c.get("responsible", "")
+                
+                texto = f"#{n:03d} - {v} - cancelada por {resp} às {dt_str}. Estoque devolvido automaticamente."
+                tk.Label(
+                    self._container_canceladas,
+                    text=texto,
+                    bg=TEMA_ATUAL["danger_soft"],
+                    fg=TEMA_ATUAL["danger"],
+                    font=FONTES["corpo"]
+                ).pack(anchor="w", pady=2)
 
     def _exportar_fechamento_xlsx(self):
         """Exporta o relatorio do periodo em formato Excel."""

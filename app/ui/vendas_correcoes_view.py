@@ -101,100 +101,90 @@ class VendasCorrecoesView(tk.Frame):
         self._build_tabela_card()
 
     def _build_filtros_card(self):
-        card_filtros = Card(self, padding=12)
+        card_filtros = Card(self, padding=14)
         card_filtros.pack(fill="x", pady=(0, 12))
 
-        SectionHeader(card_filtros, "Filtros de Pesquisa", "Localize vendas por número, período, pagamento ou responsável.").pack(anchor="w", fill="x", pady=(0, 8))
+        grid = tk.Frame(card_filtros, bg=TEMA_ATUAL["surface"])
+        grid.pack(fill="x")
 
-        row1 = tk.Frame(card_filtros, bg=TEMA_ATUAL["surface"])
-        row1.pack(fill="x", pady=(0, 6))
+        grid.columnconfigure(0, weight=1)
+        grid.columnconfigure(1, minsize=150)
+        grid.columnconfigure(2, minsize=150)
+        grid.columnconfigure(3, minsize=150)
+        grid.columnconfigure(4, minsize=100)
 
-        for text, var, w in (
-            ("Nº Venda", self._var_num_venda, 8),
-            ("Início (DD/MM/AAAA)", self._var_data_inicio, 12),
-            ("Fim (DD/MM/AAAA)", self._var_data_fim, 12),
-            ("Responsável", self._var_responsavel, 16),
-            ("Produto / Cód.", self._var_produto, 18),
-        ):
-            box = tk.Frame(row1, bg=TEMA_ATUAL["surface"])
-            box.pack(side="left", padx=(0, 10))
-            tk.Label(box, text=text, bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-            entry = StyledEntry(box, width=w, textvariable=var)
-            entry.pack(fill="x", ipady=4)
-            entry.bind("<Return>", lambda _: self.atualizar())
+        box_search = tk.Frame(grid, bg=TEMA_ATUAL["surface"])
+        box_search.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        tk.Label(box_search, text="Nº / Prod / Resp", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
 
-        row2 = tk.Frame(card_filtros, bg=TEMA_ATUAL["surface"])
-        row2.pack(fill="x", pady=(4, 0))
+        search_inner = tk.Frame(box_search, bg=TEMA_ATUAL["surface"])
+        search_inner.pack(fill="x")
+        StyledEntry(search_inner, textvariable=self._var_num_venda, width=5).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        StyledEntry(search_inner, textvariable=self._var_produto, width=8).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        StyledEntry(search_inner, textvariable=self._var_responsavel, width=8).pack(side="left", fill="x", expand=True)
 
-        box_pgto = tk.Frame(row2, bg=TEMA_ATUAL["surface"])
-        box_pgto.pack(side="left", padx=(0, 10))
+        box_date = tk.Frame(grid, bg=TEMA_ATUAL["surface"])
+        box_date.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+        tk.Label(box_date, text="Período (Início/Fim)", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
+        date_inner = tk.Frame(box_date, bg=TEMA_ATUAL["surface"])
+        date_inner.pack(fill="x")
+        StyledEntry(date_inner, textvariable=self._var_data_inicio, width=8).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        StyledEntry(date_inner, textvariable=self._var_data_fim, width=8).pack(side="left", fill="x", expand=True)
+
+        box_pgto = tk.Frame(grid, bg=TEMA_ATUAL["surface"])
+        box_pgto.grid(row=0, column=2, sticky="ew", padx=(0, 10))
         tk.Label(box_pgto, text="Pagamento", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        cb_pgto = ttk.Combobox(
+        ttk.Combobox(
             box_pgto,
             textvariable=self._var_pagamento,
             values=("Todas", *PAYMENT_METHODS),
             state="readonly",
-            width=16,
-        )
-        cb_pgto.pack(fill="x", ipady=3)
+            width=10,
+        ).pack(fill="x", ipady=3)
 
-        box_status = tk.Frame(row2, bg=TEMA_ATUAL["surface"])
-        box_status.pack(side="left", padx=(0, 16))
+        box_status = tk.Frame(grid, bg=TEMA_ATUAL["surface"])
+        box_status.grid(row=0, column=3, sticky="ew", padx=(0, 10))
         tk.Label(box_status, text="Status", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
-        cb_status = ttk.Combobox(box_status, textvariable=self._var_status, values=["Todos", "Válida", "Corrigida", "Cancelada"], state="readonly", width=14)
-        cb_status.pack(fill="x", ipady=3)
+        ttk.Combobox(box_status, textvariable=self._var_status, values=["Todos", "Válida", "Corrigida", "Cancelada"], state="readonly", width=10).pack(fill="x", ipady=3)
 
-        botoes = tk.Frame(row2, bg=TEMA_ATUAL["surface"])
-        botoes.pack(side="right", pady=(10, 0))
-
-        action_button(botoes, text="🔍 Filtrar", command=self.atualizar, variant="primary").pack(side="right", padx=(6, 0))
-        action_button(botoes, text="🧹 Limpar", command=self._limpar_filtros, variant="secondary").pack(side="right")
+        box_btn = tk.Frame(grid, bg=TEMA_ATUAL["surface"])
+        box_btn.grid(row=0, column=4, sticky="e", pady=(15, 0))
+        action_button(box_btn, text="🔍", command=self.atualizar, variant="primary").pack(side="left", padx=(0, 4))
+        action_button(box_btn, text="🧹", command=self._limpar_filtros, variant="secondary").pack(side="left")
 
     def _build_tabela_card(self):
         self._card_tabela = Card(self, padding=0)
         self._card_tabela.pack(fill="both", expand=True)
 
-        colunas = ("venda", "data_hora", "total", "pagamento", "itens", "responsavel", "status")
-        titulos = {
-            "venda": "Venda",
-            "data_hora": "Data / Hora",
-            "total": "Total",
-            "pagamento": "Forma de Pagamento",
-            "itens": "Itens",
-            "responsavel": "Responsável",
-            "status": "Status",
-        }
-        larguras = {
-            "venda": 80,
-            "data_hora": 130,
-            "total": 110,
-            "pagamento": 210,
-            "itens": 150,
-            "responsavel": 160,
-            "status": 110,
-        }
-
-        self._tree = DataTable(self._card_tabela, colunas, titulos, larguras, height=12)
-        self._tree.column("pagamento", anchor="w")
-        self._tree.column("responsavel", anchor="w")
-        self._tree.pack(side="left", fill="both", expand=True)
-
-        scroll = ttk.Scrollbar(self._card_tabela, orient="vertical", command=self._tree.yview)
-        self._tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
-
-        self._tree.bind("<Double-1>", lambda _: self._abrir_detalhe_selecionado())
+        header = tk.Frame(self._card_tabela, bg=TEMA_ATUAL["surface_2"], pady=8, padx=12)
+        header.pack(fill="x")
+        
+        header.columnconfigure(0, minsize=90)
+        header.columnconfigure(1, minsize=110)
+        header.columnconfigure(2, weight=1)
+        header.columnconfigure(3, minsize=130)
+        header.columnconfigure(4, minsize=120)
+        header.columnconfigure(5, minsize=130)
+        
+        for i, text in enumerate(["VENDA", "HORÁRIO", "RESUMO", "PAGAMENTO", "STATUS", ""]):
+            tk.Label(header, text=text, bg=TEMA_ATUAL["surface_2"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).grid(row=0, column=i, sticky="w")
+            
+        self._canvas = tk.Canvas(self._card_tabela, bg=TEMA_ATUAL["surface"], highlightthickness=0)
+        self._scroll = ttk.Scrollbar(self._card_tabela, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=self._scroll.set)
+        
+        self._tabela_body = tk.Frame(self._canvas, bg=TEMA_ATUAL["surface"])
+        self._tabela_body.bind("<Configure>", lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
+        
+        self._canvas_window = self._canvas.create_window((0, 0), window=self._tabela_body, anchor="nw")
+        self._canvas.bind("<Configure>", lambda e: self._canvas.itemconfig(self._canvas_window, width=e.width))
+        
+        self._canvas.pack(side="left", fill="both", expand=True)
+        self._scroll.pack(side="right", fill="y")
 
         # Frame de Ações da Tabela
         self._bar_acoes = tk.Frame(self, bg=TEMA_ATUAL["fundo"])
         self._bar_acoes.pack(fill="x", pady=(10, 0))
-
-        action_button(
-            self._bar_acoes,
-            text="👁️ Ver Detalhes / Corrigir Venda ➔",
-            command=self._abrir_detalhe_selecionado,
-            variant="primary",
-        ).pack(side="right")
 
         action_button(
             self._bar_acoes,
@@ -243,35 +233,41 @@ class VendasCorrecoesView(tk.Frame):
 
         self._vendas_carregadas = vendas
 
-        for item in self._tree.get_children():
-            self._tree.delete(item)
-
-        status_labels = {
-            "valid": "VÁLIDA",
-            "corrected": "CORRIGIDA",
-            "cancelled": "CANCELADA",
-        }
+        for w in self._tabela_body.winfo_children():
+            w.destroy()
 
         for idx, v in enumerate(vendas):
             s_code = v.get("status", "valid")
-            s_str = status_labels.get(s_code, s_code.upper())
             sold_at = v.get("sold_at", {})
             dt_str = f"{sold_at.get('date', '')} {sold_at.get('time', '')}".strip()
 
-            self._tree.insert(
-                "",
-                "end",
-                iid=str(idx),
-                values=(
-                    f"#{v.get('sale_number', 0):03d}",
-                    dt_str,
-                    moeda(float(v.get("total", 0))),
-                    v.get("payment_summary", ""),
-                    v.get("item_summary", {}).get("label", ""),
-                    v.get("responsible", ""),
-                    s_str,
-                ),
-            )
+            row = tk.Frame(self._tabela_body, bg=TEMA_ATUAL["surface"], pady=8, padx=12)
+            row.pack(fill="x", borderwidth=0, highlightthickness=1, highlightbackground=TEMA_ATUAL["border_soft"])
+            
+            row.columnconfigure(0, minsize=90)
+            row.columnconfigure(1, minsize=110)
+            row.columnconfigure(2, weight=1)
+            row.columnconfigure(3, minsize=130)
+            row.columnconfigure(4, minsize=120)
+            row.columnconfigure(5, minsize=130)
+            
+            tk.Label(row, text=f"#{v.get('sale_number', 0):03d}", bg=TEMA_ATUAL["surface"], font=FONTES["corpo_bold"]).grid(row=0, column=0, sticky="w")
+            tk.Label(row, text=dt_str, bg=TEMA_ATUAL["surface"]).grid(row=0, column=1, sticky="w")
+            
+            resumo_text = f"{v.get('item_summary', {}).get('label', '')} - {v.get('responsible', '')}"
+            tk.Label(row, text=resumo_text, bg=TEMA_ATUAL["surface"]).grid(row=0, column=2, sticky="w")
+            tk.Label(row, text=v.get("payment_summary", ""), bg=TEMA_ATUAL["surface"]).grid(row=0, column=3, sticky="w")
+            
+            if s_code == "valid":
+                badge = StatusBadge(row, "Válida", "OK")
+            elif s_code == "corrected":
+                badge = StatusBadge(row, "Corrigida", "ALERTA")
+            else:
+                badge = StatusBadge(row, "Cancelada", "CRITICO")
+            badge.grid(row=0, column=4, sticky="w")
+            
+            btn = action_button(row, text="Detalhe", command=lambda i=idx: self._abrir_detalhe(i), variant="secondary")
+            btn.grid(row=0, column=5, sticky="e")
 
     def _limpar_filtros(self):
         self._var_num_venda.set("")
@@ -283,13 +279,7 @@ class VendasCorrecoesView(tk.Frame):
         self._var_produto.set("")
         self.atualizar()
 
-    def _abrir_detalhe_selecionado(self):
-        selecao = self._tree.selection()
-        if not selecao:
-            messagebox.showinfo("Selecionar Venda", "Selecione uma venda na tabela para visualizar os detalhes.")
-            return
-
-        idx = int(selecao[0])
+    def _abrir_detalhe(self, idx):
         if idx < 0 or idx >= len(self._vendas_carregadas):
             return
 
@@ -382,7 +372,8 @@ class VendaDetailModal(tk.Toplevel):
 
         status_text_map = {"valid": "VÁLIDA", "corrected": "CORRIGIDA", "cancelled": "CANCELADA"}
         badge_txt = status_text_map.get(status, status.upper())
-        StatusBadge(right_hdr, badge_txt).pack(side="right")
+        StatusBadge(right_hdr, badge_txt).pack(side="right", padx=(10, 0))
+        action_button(right_hdr, text="Fechar [Esc]", command=self.destroy, variant="ghost").pack(side="right")
 
         # Scrollable Content Area
         canvas = tk.Canvas(self, bg=TEMA_ATUAL["fundo"], highlightthickness=0)
@@ -400,69 +391,84 @@ class VendaDetailModal(tk.Toplevel):
         canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
 
-        # 1. Resumo Financeiro & Pagamento
-        card_pag = Card(content, padding=14)
-        card_pag.pack(fill="x", pady=(0, 12))
-
-        SectionHeader(card_pag, "Pagamento & Resumo Financeiro", "Detalhes da forma de pagamento e total.").pack(anchor="w", fill="x", pady=(0, 6))
-
         pag_info = det.get("payment", {})
         metodo = pag_info.get("method", "Desconhecido")
         detalhe_met = pag_info.get("detail", "")
         txt_pag = f"{metodo} | {detalhe_met}" if detalhe_met else metodo
-        recebido = pag_info.get("received")
-        troco = pag_info.get("change")
-        detalhes_financeiros = []
-        if recebido is not None:
-            detalhes_financeiros.append(f"Recebido: {moeda(float(recebido))}")
-        if troco is not None:
-            detalhes_financeiros.append(f"Troco: {moeda(float(troco))}")
-
         totals = det.get("totals", {})
+        acoes = set(det.get("available_actions", []))
 
-        row_p = tk.Frame(card_pag, bg=TEMA_ATUAL["surface"])
-        row_p.pack(fill="x")
+        # 1. KPI Cards
+        kpi_frame = tk.Frame(content, bg=TEMA_ATUAL["fundo"])
+        kpi_frame.pack(fill="x", pady=(0, 12))
+        kpi_frame.columnconfigure(0, weight=1, uniform="kpi")
+        kpi_frame.columnconfigure(1, weight=1, uniform="kpi")
+        kpi_frame.columnconfigure(2, weight=1, uniform="kpi")
+        
+        c1 = Card(kpi_frame, padding=12)
+        c1.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        tk.Label(c1, text="Total válido", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
+        tk.Label(c1, text=moeda(float(totals.get('total', 0))), bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["primary"], font=FONTES["numero_card"]).pack(anchor="w", pady=(4,0))
+        
+        c2 = Card(kpi_frame, padding=12)
+        c2.grid(row=0, column=1, sticky="nsew", padx=(6, 6))
+        tk.Label(c2, text="Pagamento", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
+        tk.Label(c2, text=txt_pag, bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto"], font=FONTES["corpo_bold"]).pack(anchor="w", pady=(4,0))
+        
+        c3 = Card(kpi_frame, padding=12)
+        c3.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
+        tk.Label(c3, text="Status", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).pack(anchor="w")
+        
+        if status == "valid":
+            StatusBadge(c3, "Válida", "OK").pack(anchor="w", pady=(4,0))
+        elif status == "corrected":
+            StatusBadge(c3, "Corrigida", "ALERTA").pack(anchor="w", pady=(4,0))
+        else:
+            StatusBadge(c3, "Cancelada", "CRITICO").pack(anchor="w", pady=(4,0))
 
-        tk.Label(row_p, text=f"Forma: {txt_pag}", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["texto"], font=FONTES["corpo_bold"]).pack(side="left")
-        tk.Label(row_p, text=f"Total: {moeda(float(totals.get('total', 0)))}", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["primary"], font=FONTES["subtitulo"]).pack(side="right")
-        if detalhes_financeiros:
-            tk.Label(
-                card_pag,
-                text=" | ".join(detalhes_financeiros),
-                bg=TEMA_ATUAL["surface"],
-                fg=TEMA_ATUAL["texto_suave"],
-                font=FONTES["corpo"],
-            ).pack(anchor="w", pady=(6, 0))
-
-        # 2. Tabela de Itens da Venda
+        # 2. Tabela de Itens
         card_itens = Card(content, padding=12)
         card_itens.pack(fill="x", pady=(0, 12))
 
-        SectionHeader(card_itens, f"Itens da Venda ({totals.get('items', 0)} itens, {totals.get('units', 0)} un.)", "Produtos registrados no caixa.").pack(anchor="w", fill="x", pady=(0, 6))
-
-        colunas = ("codigo", "produto", "qtd", "preco", "subtotal")
-        titulos = {"codigo": "Cód.", "produto": "Produto", "qtd": "Qtd", "preco": "Preço Unit.", "subtotal": "Subtotal"}
-        larguras = {"codigo": 90, "produto": 260, "qtd": 60, "preco": 100, "subtotal": 110}
-
-        self._tree_items = DataTable(card_itens, colunas, titulos, larguras, height=5)
-        self._tree_items.column("produto", anchor="w")
-        self._tree_items.pack(fill="x")
-
+        hdr_itens = tk.Frame(card_itens, bg=TEMA_ATUAL["surface_2"], pady=6, padx=8)
+        hdr_itens.pack(fill="x")
+        hdr_itens.columnconfigure(0, weight=1)
+        hdr_itens.columnconfigure(1, minsize=60)
+        hdr_itens.columnconfigure(2, minsize=100)
+        hdr_itens.columnconfigure(3, minsize=160)
+        
+        for i, text in enumerate(["Produto", "Qtd", "Valor", "Ação"]):
+            tk.Label(hdr_itens, text=text, bg=TEMA_ATUAL["surface_2"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).grid(row=0, column=i, sticky="w")
+            
         for item in det.get("items", []):
-            self._tree_items.insert(
-                "",
-                "end",
-                iid=str(item.get("line_id", 0)),
-                values=(
-                    item.get("code", ""),
-                    item.get("name", ""),
-                    item.get("quantity", 0),
-                    moeda(float(item.get("unit_price", 0))),
-                    moeda(float(item.get("subtotal", 0))),
-                ),
-            )
+            row = tk.Frame(card_itens, bg=TEMA_ATUAL["surface"], pady=6, padx=8)
+            row.pack(fill="x", borderwidth=0, highlightthickness=1, highlightbackground=TEMA_ATUAL["border_soft"])
+            row.columnconfigure(0, weight=1)
+            row.columnconfigure(1, minsize=60)
+            row.columnconfigure(2, minsize=100)
+            row.columnconfigure(3, minsize=160)
+            
+            line_id = item.get("line_id", 0)
+            
+            tk.Label(row, text=f"{item.get('code', '')} - {item.get('name', '')}", bg=TEMA_ATUAL["surface"]).grid(row=0, column=0, sticky="w")
+            tk.Label(row, text=str(item.get("quantity", 0)), bg=TEMA_ATUAL["surface"]).grid(row=0, column=1, sticky="w")
+            tk.Label(row, text=moeda(float(item.get("subtotal", 0))), bg=TEMA_ATUAL["surface"]).grid(row=0, column=2, sticky="w")
+            
+            acts = tk.Frame(row, bg=TEMA_ATUAL["surface"])
+            acts.grid(row=0, column=3, sticky="e")
+            
+            btn_alt = action_button(acts, text="Alterar", command=lambda l=line_id: self._alterar_quantidade(l), variant="secondary")
+            btn_alt.pack(side="left", padx=(0, 4))
+            
+            btn_rem = action_button(acts, text="Remover", command=lambda l=line_id: self._remover_item(l), variant="danger")
+            btn_rem.pack(side="left")
+            
+            if "alter_item_quantity" not in acoes:
+                btn_alt.configure(state="disabled")
+            if "remove_item" not in acoes:
+                btn_rem.configure(state="disabled")
 
-        # 3. Histórico de Correções
+        # 3. Histórico
         card_hist = Card(content, padding=12)
         card_hist.pack(fill="x", pady=(0, 12))
 
@@ -484,40 +490,32 @@ class VendaDetailModal(tk.Toplevel):
                     justify="left",
                 ).pack(anchor="w")
 
-        # 4. Painel de Ações Disponíveis
-        card_acoes = Card(content, padding=14)
-        card_acoes.pack(fill="x", pady=(0, 14))
+        # 4. Warning Panel
+        if status != "cancelled":
+            warn_panel = Card(content, padding=12)
+            warn_panel.pack(fill="x", pady=(0, 12))
+            warn_panel.configure(bg=TEMA_ATUAL["warning_soft"])
+            
+            tk.Label(warn_panel, text="⚠️ Confirmação de correção", bg=TEMA_ATUAL["warning_soft"], fg=TEMA_ATUAL["warning"], font=FONTES["corpo_bold"]).pack(anchor="w")
+            tk.Label(warn_panel, text="As ações abaixo alteram o fluxo de caixa ou estoque da loja. Todas as correções são registradas.", bg=TEMA_ATUAL["warning_soft"], fg=TEMA_ATUAL["warning"]).pack(anchor="w")
 
-        if status == "cancelled":
-            tk.Label(
-                card_acoes,
-                text="⚠️ Venda Cancelada: Esta venda foi anulada e não permite novas correções pós-venda.",
-                bg=TEMA_ATUAL["surface"],
-                fg=TEMA_ATUAL["danger"],
-                font=FONTES["corpo_bold"],
-            ).pack(anchor="w")
-        else:
-            SectionHeader(card_acoes, "Ações de Correção Pós-Venda", "Selecione uma ação autorizada.").pack(anchor="w", fill="x", pady=(0, 8))
-
-            grid_botoes = tk.Frame(card_acoes, bg=TEMA_ATUAL["surface"])
-            grid_botoes.pack(fill="x")
-
-            acoes = set(det.get("available_actions", []))
-            botoes = (
-                ("💳 Alterar Pagamento", self._alterar_pagamento, "secondary", "alter_payment", "left"),
-                ("✏️ Alterar Quantidade", self._alterar_quantidade, "secondary", "alter_item_quantity", "left"),
-                ("🗑️ Remover Item", self._remover_item, "danger", "remove_item", "left"),
-                ("🚫 Cancelar Venda", self._cancelar_venda, "danger", "cancel_sale", "right"),
-            )
-            for texto, comando, variante, acao, lado in botoes:
-                botao = action_button(
-                    grid_botoes,
-                    text=texto,
-                    command=comando,
-                    variant=variante,
-                    state="normal" if acao in acoes else "disabled",
-                )
-                botao.pack(side=lado, padx=(0, 6) if lado == "left" else 0)
+        # Footer Frame
+        footer = tk.Frame(self, bg=TEMA_ATUAL["fundo"], padx=18, pady=14)
+        footer.pack(side="bottom", fill="x")
+        
+        if status != "cancelled":
+            btn_salvar = action_button(footer, text="Salvar correção", command=self.destroy, variant="primary")
+            btn_salvar.pack(side="right")
+            
+            btn_cancelar = action_button(footer, text="Cancelar venda", command=self._cancelar_venda, variant="danger")
+            btn_cancelar.pack(side="right", padx=(0, 8))
+            if "cancel_sale" not in acoes:
+                btn_cancelar.configure(state="disabled")
+                
+            btn_pag = action_button(footer, text="Alterar pagamento", command=self._alterar_pagamento, variant="ghost")
+            btn_pag.pack(side="left")
+            if "alter_payment" not in acoes:
+                btn_pag.configure(state="disabled")
 
     # --- AÇÕES DO MODAL DE DETALHES ---
 
@@ -741,14 +739,8 @@ class VendaDetailModal(tk.Toplevel):
         action_button(dialogo.footer_frame, text="Salvar Alteração", command=confirmar, variant="primary").pack(side="right")
         action_button(dialogo.footer_frame, text="Cancelar", command=dialogo.close, variant="ghost").pack(side="right", padx=(0, 8))
 
-    def _alterar_quantidade(self):
-        """Altera a quantidade de um item selecionado na tabela usando BaseModal."""
-        selecao = self._tree_items.selection()
-        if not selecao:
-            messagebox.showinfo("Selecionar Item", "Selecione um item na tabela acima para alterar a quantidade.", parent=self)
-            return
-
-        line_id = int(selecao[0])
+    def _alterar_quantidade(self, line_id):
+        """Altera a quantidade de um item usando BaseModal."""
         det = self._detalhe
         per, num = self._identidade_venda()
 
@@ -808,14 +800,8 @@ class VendaDetailModal(tk.Toplevel):
         action_button(dialogo.footer_frame, text="Salvar Quantidade", command=confirmar, variant="primary").pack(side="right")
         action_button(dialogo.footer_frame, text="Cancelar", command=dialogo.close, variant="ghost").pack(side="right", padx=(0, 8))
 
-    def _remover_item(self):
-        """Remove o item selecionado com confirmacao explicita de risco."""
-        selecao = self._tree_items.selection()
-        if not selecao:
-            messagebox.showinfo("Selecionar Item", "Selecione um item na tabela para remover.", parent=self)
-            return
-
-        line_id = int(selecao[0])
+    def _remover_item(self, line_id):
+        """Remove o item com confirmacao explicita de risco."""
         per, num = self._identidade_venda()
 
         def continuar(responsavel: str) -> None:

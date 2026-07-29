@@ -17,10 +17,10 @@ class ImportacaoGuidedView(tk.Frame):
     """Componente visual que gerencia a importação guiada de produtos em 4 etapas."""
 
     ETAPAS = [
-        "1. Selecionar arquivo",
-        "2. Escolher modo",
-        "3. Conferência & Impactos",
-        "4. Gravação & Confirmação",
+        "1. Arquivo",
+        "2. Modo",
+        "3. Conferencia",
+        "4. Confirmar",
     ]
 
     def __init__(self, parent: tk.Widget, on_import_complete: Callable | None = None):
@@ -75,24 +75,21 @@ class ImportacaoGuidedView(tk.Frame):
         for idx, rotulo in enumerate(self.ETAPAS, start=1):
             bar.columnconfigure(idx - 1, weight=1, uniform="stepper")
 
-            sub_frame = tk.Frame(bar, bg=TEMA_ATUAL["surface"])
-            sub_frame.grid(row=0, column=idx - 1, sticky="ew", padx=4)
-
             ativo = (self._etapa_atual == idx and not self._resultado_importacao)
-            concluido = (self._etapa_atual > idx or self._resultado_importacao is not None)
 
-            bg_step = TEMA_ATUAL["primary"] if ativo else (TEMA_ATUAL["primary_soft"] if concluido else TEMA_ATUAL["surface_2"])
-            fg_step = "#FFFFFF" if ativo else (TEMA_ATUAL["primary"] if concluido else TEMA_ATUAL["texto_suave"])
-            prefixo = "✓ " if concluido and not ativo else f"{idx}. "
+            bg_step = TEMA_ATUAL["primary_soft"] if ativo else TEMA_ATUAL["surface_3"]
+            fg_step = TEMA_ATUAL["primary"] if ativo else TEMA_ATUAL["text_muted"]
+            border_c = TEMA_ATUAL["primary"] if ativo else TEMA_ATUAL["border"]
+
+            sub_frame = tk.Frame(bar, bg=bg_step, highlightthickness=1, highlightbackground=border_c, padx=10, pady=10)
+            sub_frame.grid(row=0, column=idx - 1, sticky="ew", padx=4)
 
             pill = tk.Label(
                 sub_frame,
-                text=f"{prefixo}{rotulo.split('. ')[1]}",
+                text=rotulo,
                 bg=bg_step,
                 fg=fg_step,
-                font=FONTES["corpo_bold"] if ativo else FONTES["corpo"],
-                padx=12,
-                pady=6,
+                font=FONTES["corpo_bold"],
                 anchor="center",
             )
             pill.pack(fill="x")
@@ -260,13 +257,13 @@ class ImportacaoGuidedView(tk.Frame):
 
     def _render_etapa_3_conferencia(self):
         """Etapa 3: Revisar conferência de impactos e riscos."""
-        card = Card(self._container_etapa, padding=20)
+        card = Card(self._container_etapa, padding=16)
         card.pack(fill="both", expand=True)
 
         SectionHeader(
             card,
-            "Etapa 3: Conferência de Impactos e Riscos",
-            "Revise o resumo do que foi lido da planilha e verifique inconsistências antes de autorizar a gravação.",
+            "Conferencia da importacao",
+            "Revise impactos antes de gravar produtos, precos, custos ou estoque.",
         ).pack(anchor="w", fill="x", pady=(0, 14))
 
         previa = self._previa_dados or {}
@@ -278,57 +275,31 @@ class ImportacaoGuidedView(tk.Frame):
             grid_metrics.columnconfigure(i, weight=1, uniform="m")
 
         metricas = [
-            ("Produtos Novos", str(previa.get("produtos_inseridos_previstos", 0)), "Inserções", TEMA_ATUAL["primary_soft"], TEMA_ATUAL["primary"]),
-            ("Atualizações", str(previa.get("produtos_atualizados_previstos", 0)), "Cadastros", TEMA_ATUAL["info_soft"], TEMA_ATUAL["info"]),
-            ("Ignorados", str(previa.get("produtos_ignorados_previstos", 0)), "Sem alteração", TEMA_ATUAL["neutral_soft"], TEMA_ATUAL["text_muted"]),
-            ("Divergências Banco", str(previa.get("produtos_com_divergencia_banco", 0)), "Diferenças saldo", TEMA_ATUAL["warning_soft"], TEMA_ATUAL["warning"]),
+            ("Novos", str(previa.get("produtos_inseridos_previstos", 0))),
+            ("Atualizados", str(previa.get("produtos_atualizados_previstos", 0))),
+            ("Duplicados", str(previa.get("produtos_duplicados", 0))),
+            ("Diferenca custo", _fmt_moeda(previa.get("diferenca_custo"))),
         ]
 
-        for col_idx, (label, val, sub, bg_c, fg_c) in enumerate(metricas):
-            c_box = tk.Frame(grid_metrics, bg=bg_c, padx=12, pady=10)
+        for col_idx, (label, val) in enumerate(metricas):
+            c_box = tk.Frame(grid_metrics, bg=TEMA_ATUAL["surface"], padx=12, pady=10, highlightthickness=1, highlightbackground=TEMA_ATUAL["border"])
             c_box.grid(row=0, column=col_idx, sticky="nsew", padx=4)
-            tk.Label(c_box, text=label, bg=bg_c, fg=fg_c, font=FONTES["label_sm"]).pack(anchor="w")
-            tk.Label(c_box, text=val, bg=bg_c, fg=fg_c, font=FONTES["numero_card"]).pack(anchor="w", pady=(2, 0))
-            tk.Label(c_box, text=sub, bg=bg_c, fg=fg_c, font=FONTES["corpo"]).pack(anchor="w")
+            tk.Label(c_box, text=label, bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text_muted"], font=FONTES["corpo"]).pack(anchor="w")
+            tk.Label(c_box, text=val, bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text"], font=FONTES["corpo_bold"]).pack(anchor="w", pady=(2, 0))
 
         # Alertas de Risco Financeiro e Inconsistências
-        diferenca = previa.get("diferenca_custo")
-        tem_alerta_custo = previa.get("alerta_diferenca_custo", False)
+        total_alterados = previa.get("produtos_inseridos_previstos", 0) + previa.get("produtos_atualizados_previstos", 0)
 
-        if tem_alerta_custo:
-            alert_box = tk.Frame(card, bg=TEMA_ATUAL["danger_soft"], padx=14, pady=10)
-            alert_box.pack(fill="x", pady=(0, 12))
-            tk.Label(
-                alert_box,
-                text="⚠️ ALERTA FINANCEIRO: Diferença de Custo Total da Planilha",
-                bg=TEMA_ATUAL["danger_soft"],
-                fg=TEMA_ATUAL["danger"],
-                font=FONTES["corpo_bold"],
-            ).pack(anchor="w")
-            tk.Label(
-                alert_box,
-                text=f"A diferença entre o custo total da planilha e o calculado excede R$ 0,05 ({_fmt_moeda(diferenca)}). Verifique os valores antes de prosseguir.",
-                bg=TEMA_ATUAL["danger_soft"],
-                fg=TEMA_ATUAL["texto"],
-                font=FONTES["corpo"],
-            ).pack(anchor="w", pady=(2, 0))
-
-        # Quadro de Detalhes da Planilha
-        box_info = tk.Frame(card, bg=TEMA_ATUAL["surface_2"], padx=14, pady=10)
-        box_info.pack(fill="x", pady=(0, 14))
-
-        custo_calculado = _fmt_moeda(previa.get("valor_custo_calculado"))
-        venda_calculada = _fmt_moeda(previa.get("valor_venda_calculado"))
-
+        alert_box = tk.Frame(card, bg=TEMA_ATUAL["warning_soft"], padx=12, pady=12)
+        alert_box.pack(fill="x", pady=(14, 12))
         tk.Label(
-            box_info,
-            text=f"• Total de linhas lidas: {previa.get('total_linhas', 0)}  |  Estoque Mapeado: {'Sim' if previa.get('estoque_mapeado') else 'Não'}\n"
-                 f"• Valor Total a Custo: {custo_calculado}  |  Valor Total a Venda: {venda_calculada}\n"
-                 f"• Duplicados: {previa.get('produtos_duplicados', 0)}  |  Sem SKU: {previa.get('produtos_sem_sku', 0)}  |  Sem Preço: {previa.get('produtos_sem_preco', 0)}",
-            bg=TEMA_ATUAL["surface_2"],
-            fg=TEMA_ATUAL["texto"],
+            alert_box,
+            text=f"{total_alterados} produtos terao estoque alterado. Confirme somente depois da conferencia.",
+            bg=TEMA_ATUAL["warning_soft"],
+            fg=TEMA_ATUAL["warning"],
             font=FONTES["corpo"],
             justify="left",
+            wraplength=700
         ).pack(anchor="w")
 
         bar_nav = tk.Frame(card, bg=TEMA_ATUAL["surface"])

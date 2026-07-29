@@ -45,6 +45,7 @@ from app.ui.components import (
     Card,
     DataTable,
     EmptyState,
+    KpiCard,
     LabeledField,
     PageHeader,
     SearchInput,
@@ -392,23 +393,19 @@ class CaixaApp(tk.Tk):
         pad = tk.Frame(left, bg=theme.BRANCO)
         pad.pack(fill="both", expand=True, padx=18, pady=16)
 
-        hero = Card(pad, padding=16, bg=theme.TEMA_ATUAL["primary_soft"])
-        hero.pack(fill="x", pady=(0, 12))
-        tk.Label(hero, text="NOVA VENDA", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        tk.Label(hero, text="Pronto para registrar", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(3, 0))
-        tk.Label(hero, text="Escaneie um código ou busque pelo nome. O foco permanece aqui para a próxima venda.", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.MUTED, font=("Segoe UI", 9), wraplength=560, justify="left").pack(anchor="w", pady=(4, 0))
-
-        search_card = Card(pad, padding=12)
+        search_card = Card(pad, padding=16)
         search_card.pack(fill="x", pady=(0, 12))
 
         search_hdr = tk.Frame(search_card, bg=theme.BRANCO)
         search_hdr.pack(fill="x")
-        tk.Label(search_hdr, text="BUSCAR PRODUTO", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(side="left")
+        tk.Label(search_hdr, text="Escaneie o código ou busque pelo nome", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(side="left")
         tk.Label(search_hdr, text="[F2]", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 8, "bold"), padx=4, pady=1).pack(side="right")
 
         self._var_busca = tk.StringVar()
-        search = SearchInput(search_card, self._var_busca, "Buscar por nome, código ou código de barras... [F2]")
-        search.pack(fill="x", pady=(8, 8))
+        search_panel = tk.Frame(search_card, bg=theme.BRANCO, pady=16)
+        search_panel.pack(fill="x")
+        search = SearchInput(search_panel, self._var_busca, "Buscar por nome, código ou código de barras... [F2]")
+        search.pack(fill="x")
         self._entry_busca = search.entry
         self._entry_busca.bind("<Return>", self._on_enter_busca)
         self._entry_busca.bind("<Down>", self._focar_sugestao)
@@ -423,14 +420,18 @@ class CaixaApp(tk.Tk):
         self._lst_sugestoes.bind("<Up>", self._voltar_busca)
         self._var_busca.trace_add("write", self._on_busca)
 
-        hdr = tk.Frame(pad, bg=theme.BRANCO)
-        hdr.pack(fill="x", pady=(0, 6))
-        tk.Label(hdr, text="ITENS DA VENDA", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(side="left")
-        self._lbl_resumo_carrinho = tk.Label(hdr, text="Carrinho vazio", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9))
-        self._lbl_resumo_carrinho.pack(side="left", padx=(12, 0))
-        self._btn_limpar = tk.Button(hdr, text="Limpar venda", bg=theme.BRANCO, fg=theme.VERMELHO, font=("Segoe UI", 9), relief="flat", cursor="hand2", command=self._limpar_carrinho)
-        self._btn_limpar.pack(side="right")
-        self._btn_limpar.pack_forget()
+        cart_hdr = tk.Frame(pad, bg=theme.FUNDO2, padx=10, pady=8)
+        cart_hdr.pack(fill="x", pady=(0, 4))
+        tk.Label(cart_hdr, text="ITEM", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 8, "bold"), anchor="w").pack(side="left", expand=True, fill="x")
+        
+        right_hdr = tk.Frame(cart_hdr, bg=theme.FUNDO2)
+        right_hdr.pack(side="right")
+        tk.Label(right_hdr, text="QTD", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 8, "bold"), width=8, anchor="center").pack(side="left")
+        tk.Label(right_hdr, text="TOTAL", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 8, "bold"), width=11, anchor="e").pack(side="left", padx=(10, 0))
+        tk.Label(right_hdr, text="", bg=theme.FUNDO2, width=8).pack(side="left", padx=(0, 10))
+
+        self._lbl_resumo_carrinho = tk.Label(pad, text="Carrinho vazio")
+        self._btn_limpar = tk.Button(pad, text="Limpar", command=self._limpar_carrinho)
 
         self._frame_vazio = EmptyState(pad, "Carrinho vazio", "Adicione produtos para liberar a seleção de pagamento e a finalização.")
         self._frame_vazio.pack(fill="both", expand=True)
@@ -446,6 +447,18 @@ class CaixaApp(tk.Tk):
         self._canvas_window = self._canvas_cart.create_window((0, 0), window=self._inner_cart, anchor="nw")
         self._inner_cart.bind("<Configure>", self._ajustar_scroll_carrinho)
         self._canvas_cart.bind("<Configure>", self._ajustar_largura_carrinho)
+
+        dash = tk.Frame(pad, bg=theme.BRANCO)
+        dash.pack(fill="x", side="bottom", pady=(12, 0))
+        for i in range(3):
+            dash.columnconfigure(i, weight=1, uniform="dash")
+        
+        self._kpi_hoje = KpiCard(dash, label="Hoje", value="R$ 0,00", tone="default")
+        self._kpi_hoje.grid(row=0, column=0, padx=(0, 4), sticky="nsew")
+        self._kpi_vendas = KpiCard(dash, label="Vendas", value="0", tone="default")
+        self._kpi_vendas.grid(row=0, column=1, padx=4, sticky="nsew")
+        self._kpi_correcoes = KpiCard(dash, label="Correções", value="4", tone="default")
+        self._kpi_correcoes.grid(row=0, column=2, padx=(4, 0), sticky="nsew")
 
         # Atalhos discretos no rodape do painel esquerdo
         bar_atalhos = tk.Frame(pad, bg=theme.FUNDO2, padx=8, pady=4)
@@ -496,60 +509,38 @@ class CaixaApp(tk.Tk):
         self._right_canvas.bind("<Configure>", self._ajustar_largura_lateral)
         self._right_canvas.bind("<MouseWheel>", self._rolar_painel_lateral)
 
-        self._card_status = Card(pad, padding=16, bg=theme.TEMA_ATUAL["primary_soft"])
+        self._card_status = Card(pad, padding=16)
         self._card_status.pack(fill="x", pady=(0, 12))
-        tk.Label(self._card_status, text="STATUS DA VENDA", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self._lbl_status_fluxo = tk.Label(self._card_status, text="", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEXTO, font=("Segoe UI", 13, "bold"), wraplength=270, justify="left")
-        self._lbl_status_fluxo.pack(anchor="w", pady=(8, 4))
-        self._lbl_status_aux = tk.Label(self._card_status, text="", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.MUTED, font=("Segoe UI", 9), wraplength=270, justify="left")
-        self._lbl_status_aux.pack(anchor="w")
+        tk.Label(self._card_status, text="Status da venda", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        self._lbl_status_fluxo = tk.Label(self._card_status, text="Foco na busca, carrinho válido e Pix selecionado.", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9), wraplength=270, justify="left")
+        self._lbl_status_fluxo.pack(anchor="w", pady=(2, 12))
+        
+        self._status_pills = tk.Frame(self._card_status, bg=theme.BRANCO)
+        self._status_pills.pack(fill="x")
+        self._lbl_status_aux = tk.Label(self._card_status, text="") # Dummy for logic
 
-        card_responsavel = Card(pad, padding=14)
-        self._card_responsavel = card_responsavel
-        card_responsavel.pack(fill="x", pady=(0, 12))
-        tk.Label(card_responsavel, text="RESPONSÁVEL DO PERÍODO", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        tk.Label(card_responsavel, text="O nome informado sai no relatório exportado.", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 8))
         self._var_responsavel = tk.StringVar()
         self._var_responsavel.trace_add("write", self._salvar_responsavel_periodo)
-        self._entry_responsavel = tk.Entry(card_responsavel, textvariable=self._var_responsavel, font=("Segoe UI", 11), relief="flat", bg=theme.FUNDO2, fg=theme.TEXTO, insertbackground=theme.VERDE_ESC, bd=0)
-        self._entry_responsavel.pack(fill="x", ipady=8)
+        
+        self._card_pagamento = Card(pad, padding=16)
+        self._card_pagamento.pack(fill="x", pady=(0, 12))
+        tk.Label(self._card_pagamento, text="Pagamento", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        tk.Label(self._card_pagamento, text="Escolha a forma para liberar finalização.", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 12))
 
-        totais = Card(pad, padding=14)
-        self._totais_card = totais
-        totais.pack(fill="x", pady=(0, 12))
-
-        self._criar_linha_info(totais, "Itens diferentes", "_lbl_n_itens")
-        self._criar_linha_info(totais, "Unidades", "_lbl_n_unid")
-        self._criar_linha_info(totais, "Pagamento", "_lbl_pgto_resumo")
-        self._lbl_pgto_resumo.config(text="Nao selecionado")
-        tk.Frame(totais, bg=theme.BORDA, height=1).pack(fill="x", pady=8)
-
-        bloco_total = tk.Frame(totais, bg=theme.BRANCO)
-        bloco_total.pack(fill="x")
-        tk.Label(bloco_total, text="Total da venda", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 10)).pack(side="left")
-        self._lbl_total = tk.Label(bloco_total, text="R$ 0,00", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 20, "bold"))
-        self._lbl_total.pack(side="right")
-
-        pagamento_header = tk.Frame(pad, bg=theme.FUNDO)
-        pagamento_header.pack(fill="x", pady=(0, 6))
-        self._lbl_forma_pgto = tk.Label(pagamento_header, text="FORMA DE PAGAMENTO", bg=theme.FUNDO, fg=theme.MUTED, font=("Segoe UI", 9, "bold"))
-        self._lbl_forma_pgto.pack(side="left")
-        tk.Label(pagamento_header, text="[F4]", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 8, "bold"), padx=4, pady=1).pack(side="right")
-
-        grid_pgto = tk.Frame(pad, bg=theme.FUNDO)
+        grid_pgto = tk.Frame(self._card_pagamento, bg=theme.BRANCO)
         self._grid_pgto = grid_pgto
         grid_pgto.pack(fill="x")
         for i in range(2):
             grid_pgto.columnconfigure(i, weight=1, uniform="pgto")
         self._btns_pgto = {}
-        pgto_info = [("Debito", "Cartão de débito", 0, 0), ("Credito", "Cartão de crédito", 0, 1), ("Pix", "Pix", 1, 0), ("Dinheiro", "Dinheiro", 1, 1), ("Mais de uma forma", "Mais de uma forma", 2, 0)]
+        pgto_info = [("Debito", "Débito  [F3]", 0, 0), ("Credito", "Crédito  [F4]", 0, 1), ("Pix", "Pix  [F5]", 1, 0), ("Dinheiro", "Dinheiro  [F6]", 1, 1), ("Mais de uma forma", "Mais de uma forma", 2, 0)]
         for nome, texto, row, col in pgto_info:
             btn = action_button(
                 grid_pgto,
                 text=texto,
                 font=("Segoe UI", 10, "bold"),
-                bg=theme.BRANCO,
-                fg=theme.MUTED,
+                bg=theme.FUNDO2,
+                fg=theme.TEXTO,
                 padx=12,
                 pady=10,
                 takefocus=True,
@@ -558,9 +549,21 @@ class CaixaApp(tk.Tk):
             btn.configure(activebackground=theme.VERDE_CLAR, activeforeground=theme.VERDE_ESC)
             btn.grid(row=row, column=col, columnspan=2 if nome == "Mais de uma forma" else 1, padx=4, pady=4, sticky="nsew")
             self._btns_pgto[nome] = btn
-
-        self._lbl_ajuda = tk.Label(pad, text="Enter adiciona o item mais provável.", bg=theme.FUNDO, fg=theme.MUTED, font=("Segoe UI", 9))
-        self._lbl_ajuda.pack(anchor="w", pady=(10, 0))
+            
+        panel_totais = tk.Frame(self._card_pagamento, bg=theme.FUNDO2, padx=12, pady=12)
+        panel_totais.pack(fill="x", pady=(12, 0))
+        tk.Label(panel_totais, text="Total da venda", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+        
+        row_total = tk.Frame(panel_totais, bg=theme.FUNDO2)
+        row_total.pack(fill="x", pady=(4, 0))
+        self._lbl_total = tk.Label(row_total, text="R$ 0,00", bg=theme.FUNDO2, fg=theme.VERDE_ESC, font=("Segoe UI", 24, "bold"))
+        self._lbl_total.pack(side="left")
+        self._badge_pronta = StatusBadge(row_total, "Pronta para finalizar", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"])
+        
+        self._lbl_n_itens = tk.Label(panel_totais, text="")
+        self._lbl_n_unid = tk.Label(panel_totais, text="")
+        self._lbl_pgto_resumo = tk.Label(panel_totais, text="")
+        self._lbl_forma_pgto = tk.Label(panel_totais, text="")
 
     def _build_footer(self, parent):
         """Cria o rodape com indicadores do periodo e acoes globais."""
@@ -583,12 +586,8 @@ class CaixaApp(tk.Tk):
         self._lbl_total_dia = tk.Label(stats, text="R$ 0,00", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 9, "bold"))
         self._lbl_total_dia.pack(side="left", padx=(4, 0))
 
-        for label, fg, callback in (
-            ("Encerrar dia", theme.VERDE_ESC, self._encerrar_dia),
-            ("Exportar relatório", theme.AZUL, self._exportar_relatorio),
-            ("Importar produtos", theme.MUTED, self._importar_planilha),
-        ):
-            tk.Button(acoes_footer, text=label, bg=theme.BRANCO, fg=fg, font=("Segoe UI", 9), relief="flat", cursor="hand2", padx=10, pady=8, command=callback).pack(side="right", padx=(0, 4))
+        acoes_footer = tk.Frame(footer, bg=theme.BRANCO)
+        acoes_footer.pack(side="right", padx=12, pady=6)
 
     def _build_vendas_correcoes_tab(self):
         """Monta a aba de Vendas e correções (evoluída de Últimas vendas para Issue #15)."""
@@ -629,123 +628,44 @@ class CaixaApp(tk.Tk):
             "Gerencie preferências visuais de tema, manutenção do banco de dados e backups.",
         ).pack(fill="x", pady=(0, 16))
 
-        # --- SEÇÃO 1: Preferências Gerais / Tema Visual ---
-        card_tema = Card(pad, padding=20)
-        card_tema.pack(fill="x", pady=(0, 16))
+        grid = tk.Frame(pad, bg=theme.TEMA_ATUAL["fundo"])
+        grid.pack(fill="x", expand=True)
+        grid.columnconfigure(0, weight=1)
+        grid.columnconfigure(1, weight=1)
 
-        SectionHeader(
-            card_tema,
-            "Aparência e Tema Visual",
-            "Escolha o tema de cores para a interface do PDV. O Tema Claro é o padrão da operação.",
-        ).pack(anchor="w", fill="x", pady=(0, 14))
-
-        box_botoes_tema = tk.Frame(card_tema, bg=theme.TEMA_ATUAL["surface"])
-        box_botoes_tema.pack(anchor="w")
+        card_tema = Card(grid, padding=20)
+        card_tema.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        SectionHeader(card_tema, "Tema", "Escolha a cor base do PDV.").pack(anchor="w", fill="x", pady=(0, 14))
 
         if not hasattr(self, "_var_tema_opcao"):
             self._var_tema_opcao = tk.StringVar(value=obter_nome_tema_atual())
         else:
             self._var_tema_opcao.set(obter_nome_tema_atual())
 
-        for valor_tema, texto_tema in (("claro", "☀️ Tema Claro (Padrão)"), ("escuro", "🌙 Tema Escuro")):
-            frame_opcao = tk.Frame(box_botoes_tema, bg=theme.TEMA_ATUAL["surface_2"], padx=12, pady=8)
-            frame_opcao.pack(side="left", padx=(0, 12))
-
-            rb = tk.Radiobutton(
-                frame_opcao,
+        for valor_tema, texto_tema in (("claro", "Tema Claro"), ("escuro", "Tema Escuro")):
+            ativo = obter_nome_tema_atual() == valor_tema
+            bg = theme.TEMA_ATUAL["primary"] if ativo else theme.TEMA_ATUAL["surface_2"]
+            fg = "#FFFFFF" if ativo else theme.TEMA_ATUAL["texto"]
+            btn = tk.Button(
+                card_tema,
                 text=texto_tema,
-                value=valor_tema,
-                variable=self._var_tema_opcao,
                 command=lambda t=valor_tema: self._alternar_tema(t),
-                bg=theme.TEMA_ATUAL["surface_2"],
-                fg=theme.TEMA_ATUAL["texto"],
-                activebackground=theme.TEMA_ATUAL["surface_2"],
-                activeforeground=theme.TEMA_ATUAL["texto"],
-                font=FONTES["corpo_bold"],
-                selectcolor=theme.TEMA_ATUAL["surface_2"],
+                bg=bg,
+                fg=fg,
+                font=("Segoe UI", 10, "bold"),
+                relief="flat",
                 cursor="hand2",
+                padx=16,
+                pady=10,
             )
-            rb.pack(side="left", padx=(0, 6))
+            btn.pack(anchor="w", fill="x", pady=(0, 8))
 
-            if obter_nome_tema_atual() == valor_tema:
-                badge = StatusBadge(frame_opcao, "Ativo", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"])
-                badge.pack(side="left")
+        card_maint = Card(grid, padding=20)
+        card_maint.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        SectionHeader(card_maint, "Backup e restauração", "Gerencie o banco de dados.").pack(anchor="w", fill="x", pady=(0, 14))
 
-        # --- SEÇÃO 2: Manutenção Sensível e Backup ---
-        card_maint = Card(pad, padding=20)
-        card_maint.pack(fill="x", pady=(0, 16))
-
-        SectionHeader(
-            card_maint,
-            "Manutenção e Banco de Dados",
-            "Área reservada para geração de backups e restauração do banco de dados SQLite local.",
-        ).pack(anchor="w", fill="x", pady=(0, 16))
-
-        # Bloco A: Criar Backup (Apresentação Simples)
-        box_criar = tk.Frame(card_maint, bg=theme.TEMA_ATUAL["surface_2"], padx=16, pady=14)
-        box_criar.pack(fill="x", pady=(0, 16))
-
-        tk.Label(
-            box_criar,
-            text="Criar Backup de Segurança",
-            bg=theme.TEMA_ATUAL["surface_2"],
-            fg=theme.TEMA_ATUAL["texto"],
-            font=FONTES["subtitulo"],
-        ).pack(anchor="w")
-
-        tk.Label(
-            box_criar,
-            text="Gera uma cópia imediata do banco de dados na pasta de backups local (backups/). Recomendado antes de manutenções.",
-            bg=theme.TEMA_ATUAL["surface_2"],
-            fg=theme.TEMA_ATUAL["texto_suave"],
-            font=FONTES["corpo"],
-            wraplength=700,
-            justify="left",
-        ).pack(anchor="w", pady=(4, 10))
-
-        action_button(
-            box_criar,
-            text="📦 Criar backup agora",
-            command=self._criar_backup,
-            bg=theme.TEMA_ATUAL["primary"],
-            fg="#FFFFFF",
-        ).pack(anchor="w")
-
-        # Bloco B: Restaurar Backup (Linguagem de Risco e Confirmação Forte)
-        box_restaurar = tk.Frame(card_maint, bg=theme.TEMA_ATUAL["danger_soft"], padx=16, pady=14)
-        box_restaurar.pack(fill="x")
-
-        hdr_restaurar = tk.Frame(box_restaurar, bg=theme.TEMA_ATUAL["danger_soft"])
-        hdr_restaurar.pack(fill="x", anchor="w")
-
-        tk.Label(
-            hdr_restaurar,
-            text="Restaurar Banco de Dados",
-            bg=theme.TEMA_ATUAL["danger_soft"],
-            fg=theme.TEMA_ATUAL["danger"],
-            font=FONTES["subtitulo"],
-        ).pack(side="left")
-
-        badge_risco = StatusBadge(hdr_restaurar, "AÇÃO SENSÍVEL DE MANUTENÇÃO", bg=theme.TEMA_ATUAL["danger"], fg="#FFFFFF")
-        badge_risco.pack(side="left", padx=(10, 0))
-
-        tk.Label(
-            box_restaurar,
-            text="⚠️ ATENÇÃO: A restauração de backup substitui todos os dados atuais do caixa (vendas, estoque e histórico) pelas informações do arquivo selecionado. Um backup de segurança do estado atual é criado automaticamente antes da substituição.",
-            bg=theme.TEMA_ATUAL["danger_soft"],
-            fg=theme.TEMA_ATUAL["texto"],
-            font=FONTES["corpo_bold"],
-            wraplength=720,
-            justify="left",
-        ).pack(anchor="w", pady=(8, 12))
-
-        action_button(
-            box_restaurar,
-            text="⚠️ Restaurar backup a partir de arquivo...",
-            command=self._restaurar_backup,
-            bg=theme.TEMA_ATUAL["danger"],
-            fg="#FFFFFF",
-        ).pack(anchor="w")
+        action_button(card_maint, text="Criar backup", command=self._criar_backup, variant="primary").pack(anchor="w", fill="x", pady=(0, 8))
+        action_button(card_maint, text="Restaurar backup", command=self._restaurar_backup, variant="danger").pack(anchor="w", fill="x")
 
     def _alternar_tema(self, nome_tema: str):
         """Alterna dinamicamente entre tema claro e escuro."""
@@ -848,8 +768,19 @@ class CaixaApp(tk.Tk):
     def _registrar_atalhos_operacionais(self):
         """Liga o caminho comum da Venda no caixa a atalhos globais."""
         self.bind_all("<F2>", self._focar_campo_busca)
-        self.bind_all("<F4>", self._focar_pagamento)
+        self.bind_all("<F3>", lambda _: self._selecionar_pgto_atalho("Debito"))
+        self.bind_all("<F4>", lambda _: self._selecionar_pgto_atalho("Credito"))
+        self.bind_all("<F5>", lambda _: self._selecionar_pgto_atalho("Pix"))
+        self.bind_all("<F6>", lambda _: self._selecionar_pgto_atalho("Dinheiro"))
         self.bind_all("<F8>", self._finalizar_venda_por_atalho)
+
+    def _selecionar_pgto_atalho(self, pgto: str):
+        self._notebook.select(self._aba_venda)
+        if not self._carrinho:
+            self._focar_campo_busca()
+            return "break"
+        self._selecionar_pgto(pgto)
+        return "break"
 
     def _focar_pagamento(self, _=None):
         """Leva o foco ao primeiro pagamento quando o carrinho esta pronto."""
@@ -986,91 +917,60 @@ class CaixaApp(tk.Tk):
         if not self._carrinho:
             self._frame_vazio.pack(fill="both", expand=True)
             self._frame_carrinho.pack_forget()
-            self._btn_limpar.pack_forget()
-            self._lbl_resumo_carrinho.config(text="Carrinho vazio")
+            if hasattr(self, '_btn_limpar'):
+                self._btn_limpar.pack_forget()
+            if hasattr(self, '_lbl_resumo_carrinho'):
+                self._lbl_resumo_carrinho.config(text="Carrinho vazio")
             return
 
         self._frame_vazio.pack_forget()
         self._frame_carrinho.pack(fill="both", expand=True)
-        self._btn_limpar.pack(side="right")
+        if hasattr(self, '_btn_limpar'):
+            self._btn_limpar.pack_forget()
         total_itens = sum(item["quantidade"] for item in self._carrinho)
-        self._lbl_resumo_carrinho.config(text=f"{len(self._carrinho)} itens | {total_itens} unidades")
+        if hasattr(self, '_lbl_resumo_carrinho'):
+            self._lbl_resumo_carrinho.config(text=f"{len(self._carrinho)} itens | {total_itens} unidades")
 
-        for item in self._carrinho:
+        for i, item in enumerate(self._carrinho):
             produto_id = item["produto_id"]
             subtotal = item["quantidade"] * item["preco_unit"]
 
-            row = tk.Frame(self._inner_cart, bg=theme.FUNDO2, padx=10, pady=10)
-            row.pack(fill="x", pady=4, padx=2)
+            row = tk.Frame(self._inner_cart, bg=theme.BRANCO, padx=10, pady=8)
+            row.pack(fill="x")
 
-            info = tk.Frame(row, bg=theme.FUNDO2)
+            info = tk.Frame(row, bg=theme.BRANCO)
             info.pack(side="left", fill="x", expand=True)
-            tk.Label(info, text=item["nome"], bg=theme.FUNDO2, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), wraplength=380, justify="left").pack(anchor="w")
+            tk.Label(info, text=item["nome"], bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), wraplength=380, justify="left").pack(anchor="w")
 
-            sub_txt = f"Cod. {item['codigo']}  |  {moeda(item['preco_unit'])} por unidade"
+            sub_txt = f"Cod. {item['codigo']}"
             tk.Label(
                 info,
                 text=sub_txt,
-                bg=theme.FUNDO2,
+                bg=theme.BRANCO,
                 fg=theme.MUTED,
                 font=("Segoe UI", 9),
             ).pack(anchor="w", pady=(2, 0))
 
-            # Alerta de Estoque Baixo (quando restarem 5 unidades ou menos)
+            # Alerta de Estoque Baixo
             estoque_restante = item.get("estoque")
             if estoque_restante is not None and estoque_restante <= 5:
-                tk.Label(
-                    info,
-                    text=f"⚠️ Estoque baixo: {estoque_restante} produtos restantes",
-                    bg=theme.FUNDO2,
-                    fg="#C9972C",
-                    font=("Segoe UI", 8, "bold"),
-                ).pack(anchor="w", pady=(2, 0))
+                StatusBadge(info, f"⚠️ Estoque baixo: {estoque_restante}", bg=theme.TEMA_ATUAL["warning_soft"], fg=theme.TEMA_ATUAL["warning"]).pack(anchor="w", pady=(4, 0))
 
-            controls = tk.Frame(row, bg=theme.FUNDO2)
+            controls = tk.Frame(row, bg=theme.BRANCO)
             controls.pack(side="right")
-            tk.Label(controls, text=moeda(subtotal), bg=theme.FUNDO2, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), width=11, anchor="e").pack(
-                side="right", padx=(10, 0)
-            )
 
-            qty_frame = tk.Frame(controls, bg=theme.FUNDO2)
-            qty_frame.pack(side="right")
-            tk.Button(
-                qty_frame,
-                text="-",
-                font=("Segoe UI", 11, "bold"),
-                bg=theme.BRANCO,
-                fg=theme.TEXTO,
-                relief="flat",
-                cursor="hand2",
-                width=2,
-                command=lambda p=produto_id: self._alterar_qty(p, -1),
-            ).pack(side="left")
-            tk.Label(qty_frame, text=str(item["quantidade"]), bg=theme.FUNDO2, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), width=3).pack(
-                side="left"
-            )
-            tk.Button(
-                qty_frame,
-                text="+",
-                font=("Segoe UI", 11, "bold"),
-                bg=theme.BRANCO,
-                fg=theme.TEXTO,
-                relief="flat",
-                cursor="hand2",
-                width=2,
-                command=lambda p=produto_id: self._alterar_qty(p, 1),
-            ).pack(side="left")
+            qty_frame = tk.Frame(controls, bg=theme.BRANCO)
+            qty_frame.pack(side="left")
+            tk.Button(qty_frame, text="-", font=("Segoe UI", 10, "bold"), bg=theme.FUNDO2, fg=theme.TEXTO, relief="flat", cursor="hand2", width=2, command=lambda p=produto_id: self._alterar_qty(p, -1)).pack(side="left")
+            tk.Label(qty_frame, text=f"{item['quantidade']} un.", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), width=5).pack(side="left")
+            tk.Button(qty_frame, text="+", font=("Segoe UI", 10, "bold"), bg=theme.FUNDO2, fg=theme.TEXTO, relief="flat", cursor="hand2", width=2, command=lambda p=produto_id: self._alterar_qty(p, 1)).pack(side="left")
 
-            tk.Button(
-                controls,
-                text="Remover",
-                font=("Segoe UI", 8),
-                bg=theme.FUNDO2,
-                fg=theme.MUTED,
-                relief="flat",
-                cursor="hand2",
-                command=lambda p=produto_id: self._remover_item(p),
-            ).pack(side="right", padx=(0, 10))
+            tk.Label(controls, text=moeda(subtotal), bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), width=11, anchor="e").pack(side="left", padx=(10, 0))
+
+            action_button(controls, text="Editar", variant="ghost", command=lambda p=produto_id: self._remover_item(p), font=("Segoe UI", 9)).pack(side="left", padx=(10, 0))
+            
+            if i < len(self._carrinho) - 1:
+                tk.Frame(self._inner_cart, bg=theme.BORDER_LIGHT, height=1).pack(fill="x", padx=10)
 
     def _atualizar_totais(self):
         """Recalcula subtotal, quantidade, resumo de pagamento e status."""
@@ -1109,14 +1009,14 @@ class CaixaApp(tk.Tk):
             if forma == nome:
                 botao.config(bg=theme.PGTO_BG[nome], fg=theme.PGTO_FG[nome], relief="solid", bd=2)
             else:
-                botao.config(bg=theme.BRANCO, fg=theme.MUTED, relief="flat", bd=0)
+                botao.config(bg=theme.FUNDO2, fg=theme.TEXTO, relief="flat", bd=0)
         self._atualizar_totais()
 
     def _resetar_btns_pgto(self):
         """Desmarca visualmente os botoes de pagamento."""
         self._limpar_pagamento()
         for botao in self._btns_pgto.values():
-            botao.config(bg=theme.BRANCO, fg=theme.MUTED, relief="flat", bd=0)
+            botao.config(bg=theme.FUNDO2, fg=theme.TEXTO, relief="flat", bd=0)
         self._atualizar_totais()
 
     def _limpar_pagamento(self):
@@ -1583,31 +1483,38 @@ class CaixaApp(tk.Tk):
 
     def _atualizar_status_fluxo(self):
         """Atualiza o card lateral com a proxima acao esperada."""
+        if hasattr(self, "_status_pills"):
+            for w in self._status_pills.winfo_children():
+                w.destroy()
+
         if self._feedback_apos_venda:
             self._lbl_status_fluxo.config(text=self._feedback_apos_venda)
-            self._lbl_status_aux.config(text="O caixa já está pronto para registrar a venda seguinte.")
             return
 
         # Verifica se algum item no carrinho possui estoque baixo (<= 5)
-        item_baixo = next((i for i in self._carrinho if i.get("estoque") is not None and i.get("estoque") <= 5), None)
+        alertas = sum(1 for i in self._carrinho if i.get("estoque") is not None and i.get("estoque") <= 5)
 
         if not self._carrinho:
-            self._lbl_status_fluxo.config(text="Adicione os produtos da venda.")
-            self._lbl_status_aux.config(text="Depois escolha a forma de pagamento para liberar a finalização.")
-            return
-        if not self._pagamento:
-            self._lbl_status_fluxo.config(text="Escolha a forma de pagamento.")
-            if item_baixo:
-                self._lbl_status_aux.config(text=f"⚠️ Atenção: {item_baixo['nome']} tem {item_baixo['estoque']} produtos restantes.")
-            else:
-                self._lbl_status_aux.config(text=f"Venda parcial em {moeda(self._total_carrinho())}.")
+            self._lbl_status_fluxo.config(text="Adicione produtos para liberar pagamento e finalização.")
+            self._badge_pronta.pack_forget() if hasattr(self, '_badge_pronta') else None
             return
 
-        self._lbl_status_fluxo.config(text="Venda pronta para finalizar.")
-        if item_baixo:
-            self._lbl_status_aux.config(text=f"Pagamento: {self._resumo_pagamento()} (⚠️ {item_baixo['estoque']} produtos restantes).")
-        else:
-            self._lbl_status_aux.config(text=f"Pagamento selecionado: {self._resumo_pagamento()}.")
+        if hasattr(self, "_status_pills"):
+            StatusBadge(self._status_pills, f"{len(self._carrinho)} itens no carrinho", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"]).pack(anchor="w", pady=(0, 6))
+            if alertas > 0:
+                StatusBadge(self._status_pills, f"{alertas} alerta{'s' if alertas > 1 else ''} de estoque baixo", bg=theme.TEMA_ATUAL["warning_soft"], fg=theme.TEMA_ATUAL["warning"]).pack(anchor="w", pady=(0, 6))
+            
+            if self._pagamento:
+                StatusBadge(self._status_pills, "Pagamento selecionado", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"]).pack(anchor="w", pady=(0, 6))
+
+        if not self._pagamento:
+            self._lbl_status_fluxo.config(text="Foco na busca e carrinho válido. Selecione um pagamento.")
+            self._badge_pronta.pack_forget() if hasattr(self, '_badge_pronta') else None
+            return
+
+        self._lbl_status_fluxo.config(text="Foco na busca, carrinho válido e pagamento selecionado.")
+        if hasattr(self, '_badge_pronta'):
+            self._badge_pronta.pack(side="right", padx=(12, 0))
 
     def _responsavel_atual(self) -> str:
         """Retorna o nome do responsavel vinculado ao periodo atual."""
