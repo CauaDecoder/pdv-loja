@@ -74,7 +74,7 @@ class SistemaVisualTest(unittest.TestCase):
             style = components.configure_styles(root, "escuro")
             self.assertEqual(
                 style.lookup("TCombobox", "fieldbackground", ("readonly",)),
-                tema.TEMA_ESCURO["surface_3"],
+                tema.TEMA_ESCURO["surface"],
             )
             self.assertEqual(
                 style.lookup("TCombobox", "foreground", ("readonly",)),
@@ -119,8 +119,112 @@ class SistemaVisualTest(unittest.TestCase):
 
             tree = components.DataTable(root, columns=("col1", "col2"), headings={"col1": "C1", "col2": "C2"})
             self.assertIsInstance(tree, ttk.Treeview)
+
+            variable = tk.BooleanVar(value=False)
+            toggle = components.ToggleSwitch(root, variable=variable, text="Filtro")
+            toggle.pack()
+            self.assertFalse(toggle.get())
+            toggle.set(True)
+            self.assertTrue(variable.get())
         finally:
             root.destroy()
+
+    def test_toggle_switch_respeita_interacao_e_estado_disabled(self):
+        """Alternador dispara callback por interação e bloqueia mudanças desabilitado."""
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        chamadas = []
+        try:
+            variable = tk.BooleanVar(value=False)
+            toggle = components.ToggleSwitch(
+                root,
+                variable=variable,
+                text="Sem custo",
+                command=lambda: chamadas.append(variable.get()),
+            )
+            toggle.pack()
+            root.deiconify()
+            root.update()
+            toggle.event_generate("<Button-1>", x=5, y=5)
+            root.update()
+            self.assertTrue(toggle.get())
+            self.assertEqual(chamadas, [True])
+
+            toggle.configure(state="disabled")
+            toggle.event_generate("<Button-1>")
+            root.update()
+            self.assertTrue(toggle.get())
+            self.assertEqual(chamadas, [True])
+
+            toggle.configure(state="normal")
+            toggle.focus_force()
+            root.update()
+            self.assertEqual(
+                toggle.itemcget(toggle._focus_item, "outline"),
+                tema.TEMA_CLARO["focus_ring"],
+            )
+
+            toggle.event_generate("<space>")
+            root.update()
+            self.assertFalse(toggle.get())
+            toggle.event_generate("<Return>")
+            root.update()
+            self.assertTrue(toggle.get())
+            self.assertEqual(chamadas, [True, False, True])
+
+            variable.set(False)
+            root.update()
+            self.assertFalse(toggle.get())
+            self.assertEqual(chamadas, [True, False, True])
+
+            tema.definir_tema_atual("escuro")
+            components.apply_theme_to_widget_tree(toggle, tema.TEMA_CLARO)
+            self.assertEqual(
+                toggle.itemcget(toggle._label_item, "fill"),
+                tema.TEMA_ESCURO["text"],
+            )
+        finally:
+            root.destroy()
+            tema.definir_tema_atual("claro")
+
+    def test_notebook_interno_usa_estilo_sem_moldura(self):
+        """Notebook interno mantém abas e remove a moldura externa."""
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            style = components.configure_styles(root)
+            notebook = ttk.Notebook(root, style="Inner.TNotebook")
+            primeira = tk.Frame(notebook)
+            segunda = tk.Frame(notebook)
+            notebook.add(primeira, text="Primeira")
+            notebook.add(segunda, text="Segunda")
+            notebook.select(segunda)
+            self.assertEqual(str(style.lookup("Inner.TNotebook", "borderwidth")), "0")
+            self.assertTrue(style.layout("Inner.TNotebook"))
+            self.assertEqual(notebook.index(notebook.select()), 1)
+            self.assertEqual(
+                style.lookup("Inner.TNotebook.Tab", "foreground", ("selected",)),
+                tema.obter_tema_atual()["primary"],
+            )
+            tema.definir_tema_atual("escuro")
+            style = components.configure_styles(root, "escuro")
+            self.assertEqual(
+                style.lookup("Inner.TNotebook.Tab", "foreground", ("selected",)),
+                tema.TEMA_ESCURO["primary"],
+            )
+        finally:
+            root.destroy()
+            tema.definir_tema_atual("claro")
 
     def test_painel_estoque_instanciacao(self):
         """Testa se o PainelEstoque instacia e atualiza sem erros no Tkinter."""
@@ -140,9 +244,20 @@ class SistemaVisualTest(unittest.TestCase):
                 from estoque.painel import PainelEstoque
 
                 painel = PainelEstoque(root)
+                painel.pack(fill="both", expand=True)
                 self.assertIsInstance(painel, PainelEstoque)
+                self.assertFalse(painel._filtros_content.winfo_manager())
+                painel._btn_toggle_filtros.invoke()
+                self.assertTrue(painel._filtros_content.winfo_manager())
                 painel.atualizar()
                 painel._limpar_filtros()
+                root.deiconify()
+                root.geometry("1000x700")
+                root.update()
+                self.assertEqual(painel._kpi_columns, 4)
+                root.geometry("1200x700")
+                root.update()
+                self.assertEqual(painel._kpi_columns, 8)
             finally:
                 database.DB_PATH = db_path_original
                 root.destroy()

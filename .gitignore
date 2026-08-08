@@ -32,7 +32,6 @@ backups/
 *.xlsx
 py.cmd
 .scratch/
-docs/adr/
 docs/specs/
 docs/prototypes/
 docs/validation/
@@ -44,5 +43,4 @@ products5.csv
 Products4.csv
 Products5.csv
 produtos3.csv
-higienizar.py
 handoff-design-frontend-pdv.md

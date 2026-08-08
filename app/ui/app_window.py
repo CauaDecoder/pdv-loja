@@ -19,6 +19,7 @@ Requisitos: Python 3.10+, openpyxl
 """
 
 import tkinter as tk
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -67,6 +68,18 @@ PLACEHOLDER_BUSCA = "Escaneie o código ou busque pelo nome"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RELATORIOS_DIR = PROJECT_ROOT / "relatorios"
 BACKUPS_DIR = PROJECT_ROOT / "backups"
+
+
+@dataclass(slots=True)
+class CartRowWidgets:
+    """Mantém referências dos widgets mutáveis de uma linha do carrinho."""
+
+    row: tk.Frame
+    nome: tk.Label
+    codigo: tk.Label
+    alerta: StatusBadge
+    quantidade: tk.Label
+    subtotal: tk.Label
 
 
 class MovimentacoesEstoque(tk.Frame):
@@ -250,6 +263,9 @@ class CaixaApp(tk.Tk):
         self._resultados_busca: list = []
         self._feedback_apos_venda: str | None = None
         self._feedback_after_id: str | None = None
+        self._focus_after_id: str | None = None
+        self._manter_foco_after_id: str | None = None
+        self._clock_after_id: str | None = None
         self._atualizando_responsavel = False
         self._layout_compacto = False
 
@@ -315,7 +331,7 @@ class CaixaApp(tk.Tk):
         """Monta as subabas internas do modulo de estoque."""
         estoque_wrap = tk.Frame(self._aba_estoque, bg=theme.TEMA_ATUAL["fundo"])
         estoque_wrap.pack(fill="both", expand=True)
-        self._estoque_notebook = ttk.Notebook(estoque_wrap, style="TNotebook")
+        self._estoque_notebook = ttk.Notebook(estoque_wrap, style="Inner.TNotebook")
         self._estoque_notebook.pack(fill="both", expand=True, padx=0, pady=(0, 0))
 
         aba_dashboard = tk.Frame(self._estoque_notebook, bg=theme.TEMA_ATUAL["fundo"])
@@ -410,7 +426,7 @@ class CaixaApp(tk.Tk):
         self._entry_busca.bind("<Return>", self._on_enter_busca)
         self._entry_busca.bind("<Down>", self._focar_sugestao)
         self._entry_busca.bind("<Escape>", lambda _: self._limpar_busca())
-        self.after(100, lambda: self._entry_busca.focus() if hasattr(self, "_entry_busca") else None)
+        self._focus_after_id = self.after(100, self._focar_busca_inicial)
 
         self._frame_sugestoes = tk.Frame(search_card, bg=theme.BRANCO)
         self._lst_sugestoes = tk.Listbox(self._frame_sugestoes, font=("Segoe UI", 10), bg=theme.BRANCO, fg=theme.TEXTO, selectbackground=theme.VERDE_CLAR, selectforeground=theme.VERDE_ESC, relief="flat", activestyle="none", highlightthickness=0)
@@ -444,6 +460,7 @@ class CaixaApp(tk.Tk):
         scrollbar.pack(side="right", fill="y")
 
         self._inner_cart = tk.Frame(self._canvas_cart, bg=theme.BRANCO)
+        self._cart_rows: dict[int, CartRowWidgets] = {}
         self._canvas_window = self._canvas_cart.create_window((0, 0), window=self._inner_cart, anchor="nw")
         self._inner_cart.bind("<Configure>", self._ajustar_scroll_carrinho)
         self._canvas_cart.bind("<Configure>", self._ajustar_largura_carrinho)
@@ -743,10 +760,13 @@ class CaixaApp(tk.Tk):
         if not self._frame_sugestoes.winfo_ismapped():
             self._frame_sugestoes.pack(fill="x", padx=12, pady=(0, 10))
         self._lst_sugestoes.configure(height=min(len(self._resultados_busca), 5))
-        self.after_idle(self._manter_foco_busca)
+        if self._manter_foco_after_id:
+            self.after_cancel(self._manter_foco_after_id)
+        self._manter_foco_after_id = self.after_idle(self._manter_foco_busca)
 
     def _manter_foco_busca(self):
         """Mantem o cursor no campo de busca apos atualizar a lista."""
+        self._manter_foco_after_id = None
         if self._entry_busca.winfo_exists():
             self._entry_busca.focus_set()
             self._entry_busca.icursor("end")
@@ -910,11 +930,11 @@ class CaixaApp(tk.Tk):
         self._resetar_btns_pgto()
 
     def _renderizar_carrinho(self):
-        """Reconstrui visualmente a lista de itens da venda atual."""
-        for widget in self._inner_cart.winfo_children():
-            widget.destroy()
-
+        """Atualiza a lista visual e reconstrói somente quando sua estrutura muda."""
         if not self._carrinho:
+            for widget in self._inner_cart.winfo_children():
+                widget.destroy()
+            self._cart_rows.clear()
             self._frame_vazio.pack(fill="both", expand=True)
             self._frame_carrinho.pack_forget()
             if hasattr(self, '_btn_limpar'):
@@ -931,30 +951,42 @@ class CaixaApp(tk.Tk):
         if hasattr(self, '_lbl_resumo_carrinho'):
             self._lbl_resumo_carrinho.config(text=f"{len(self._carrinho)} itens | {total_itens} unidades")
 
+        ids_atuais = tuple(self._cart_rows)
+        ids_desejados = tuple(item["produto_id"] for item in self._carrinho)
+        if ids_atuais == ids_desejados:
+            for item in self._carrinho:
+                self._atualizar_linha_carrinho(item, self._cart_rows[item["produto_id"]])
+            return
+
+        for widget in self._inner_cart.winfo_children():
+            widget.destroy()
+        self._cart_rows.clear()
+
         for i, item in enumerate(self._carrinho):
             produto_id = item["produto_id"]
-            subtotal = item["quantidade"] * item["preco_unit"]
 
             row = tk.Frame(self._inner_cart, bg=theme.BRANCO, padx=10, pady=8)
             row.pack(fill="x")
 
             info = tk.Frame(row, bg=theme.BRANCO)
             info.pack(side="left", fill="x", expand=True)
-            tk.Label(info, text=item["nome"], bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), wraplength=380, justify="left").pack(anchor="w")
+            nome_label = tk.Label(info, bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), wraplength=380, justify="left")
+            nome_label.pack(anchor="w")
 
-            sub_txt = f"Cod. {item['codigo']}"
-            tk.Label(
+            codigo_label = tk.Label(
                 info,
-                text=sub_txt,
                 bg=theme.BRANCO,
                 fg=theme.MUTED,
                 font=("Segoe UI", 9),
-            ).pack(anchor="w", pady=(2, 0))
+            )
+            codigo_label.pack(anchor="w", pady=(2, 0))
 
-            # Alerta de Estoque Baixo
-            estoque_restante = item.get("estoque")
-            if estoque_restante is not None and estoque_restante <= 5:
-                StatusBadge(info, f"⚠️ Estoque baixo: {estoque_restante}", bg=theme.TEMA_ATUAL["warning_soft"], fg=theme.TEMA_ATUAL["warning"]).pack(anchor="w", pady=(4, 0))
+            alerta_label = StatusBadge(
+                info,
+                "",
+                bg=theme.TEMA_ATUAL["warning_soft"],
+                fg=theme.TEMA_ATUAL["warning"],
+            )
 
             controls = tk.Frame(row, bg=theme.BRANCO)
             controls.pack(side="right")
@@ -962,15 +994,43 @@ class CaixaApp(tk.Tk):
             qty_frame = tk.Frame(controls, bg=theme.BRANCO)
             qty_frame.pack(side="left")
             tk.Button(qty_frame, text="-", font=("Segoe UI", 10, "bold"), bg=theme.FUNDO2, fg=theme.TEXTO, relief="flat", cursor="hand2", width=2, command=lambda p=produto_id: self._alterar_qty(p, -1)).pack(side="left")
-            tk.Label(qty_frame, text=f"{item['quantidade']} un.", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), width=5).pack(side="left")
+            quantidade_label = tk.Label(qty_frame, bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), width=5)
+            quantidade_label.pack(side="left")
             tk.Button(qty_frame, text="+", font=("Segoe UI", 10, "bold"), bg=theme.FUNDO2, fg=theme.TEXTO, relief="flat", cursor="hand2", width=2, command=lambda p=produto_id: self._alterar_qty(p, 1)).pack(side="left")
 
-            tk.Label(controls, text=moeda(subtotal), bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), width=11, anchor="e").pack(side="left", padx=(10, 0))
+            subtotal_label = tk.Label(controls, bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), width=11, anchor="e")
+            subtotal_label.pack(side="left", padx=(10, 0))
 
             action_button(controls, text="Editar", variant="ghost", command=lambda p=produto_id: self._remover_item(p), font=("Segoe UI", 9)).pack(side="left", padx=(10, 0))
+
+            widgets = CartRowWidgets(
+                row=row,
+                nome=nome_label,
+                codigo=codigo_label,
+                alerta=alerta_label,
+                quantidade=quantidade_label,
+                subtotal=subtotal_label,
+            )
+            self._cart_rows[produto_id] = widgets
+            self._atualizar_linha_carrinho(item, widgets)
             
             if i < len(self._carrinho) - 1:
                 tk.Frame(self._inner_cart, bg=theme.BORDER_LIGHT, height=1).pack(fill="x", padx=10)
+
+    def _atualizar_linha_carrinho(self, item: dict, widgets: CartRowWidgets) -> None:
+        widgets.nome.configure(text=item["nome"])
+        widgets.codigo.configure(text=f"Cod. {item['codigo']}")
+        widgets.quantidade.configure(text=f"{item['quantidade']} un.")
+        widgets.subtotal.configure(text=moeda(item["quantidade"] * item["preco_unit"]))
+
+        estoque_restante = item.get("estoque")
+        alerta = widgets.alerta
+        if estoque_restante is not None and estoque_restante <= 5:
+            alerta.configure(text=f"⚠️ Estoque baixo: {estoque_restante}")
+            if not alerta.winfo_manager():
+                alerta.pack(anchor="w", pady=(4, 0))
+        else:
+            alerta.pack_forget()
 
     def _atualizar_totais(self):
         """Recalcula subtotal, quantidade, resumo de pagamento e status."""
@@ -1969,7 +2029,7 @@ class CaixaApp(tk.Tk):
         if event is not None and event.widget is not self:
             return
         compacto = self.winfo_width() < 980
-        compacto_altura = self.winfo_height() < 700
+        compacto_altura = self.winfo_height() < 760
         if compacto_altura != self._compacto_altura:
             self._compacto_altura = compacto_altura
             self._aplicar_compacto_altura(compacto_altura)
@@ -2020,20 +2080,10 @@ class CaixaApp(tk.Tk):
             self._lbl_status_fluxo.configure(font=("Segoe UI", 10, "bold"), wraplength=230)
             self._lbl_status_fluxo.pack_configure(pady=(4, 2))
             self._lbl_status_aux.configure(font=("Segoe UI", 8), wraplength=230)
-            if hasattr(self, "_card_responsavel") and self._card_responsavel:
-                self._card_responsavel.configure(padx=10, pady=8)
-                self._card_responsavel.pack_configure(pady=(0, 7))
-            if hasattr(self, "_entry_responsavel") and self._entry_responsavel:
-                self._entry_responsavel.pack_configure(ipady=5)
-            if hasattr(self, "_totais_card") and self._totais_card:
-                self._totais_card.configure(padx=10, pady=9)
-                self._totais_card.pack_configure(pady=(0, 7))
             self._lbl_total.configure(font=("Segoe UI", 17, "bold"))
             self._lbl_forma_pgto.pack_configure(pady=(0, 3))
             self._right_action_bar.configure(padx=8, pady=7)
             self._btn_finalizar.configure(font=("Segoe UI", 10, "bold"), pady=9)
-            if hasattr(self, "_lbl_ajuda") and self._lbl_ajuda:
-                self._lbl_ajuda.pack_forget()
             for botao in self._btns_pgto.values():
                 botao.configure(font=("Segoe UI", 8, "bold"), pady=7)
                 botao.grid_configure(padx=3, pady=3)
@@ -2053,20 +2103,10 @@ class CaixaApp(tk.Tk):
             self._lbl_status_fluxo.configure(font=("Segoe UI", 13, "bold"), wraplength=230)
             self._lbl_status_fluxo.pack_configure(pady=(8, 4))
             self._lbl_status_aux.configure(font=("Segoe UI", 9), wraplength=230)
-            if hasattr(self, "_card_responsavel") and self._card_responsavel:
-                self._card_responsavel.configure(padx=14, pady=12)
-                self._card_responsavel.pack_configure(pady=(0, 12))
-            if hasattr(self, "_entry_responsavel") and self._entry_responsavel:
-                self._entry_responsavel.pack_configure(ipady=8)
-            if hasattr(self, "_totais_card") and self._totais_card:
-                self._totais_card.configure(padx=14, pady=14)
-                self._totais_card.pack_configure(pady=(0, 12))
             self._lbl_total.configure(font=("Segoe UI", 20, "bold"))
             self._lbl_forma_pgto.pack_configure(pady=(0, 6))
             self._right_action_bar.configure(padx=10, pady=10)
             self._btn_finalizar.configure(font=("Segoe UI", 12, "bold"), pady=12)
-            if hasattr(self, "_lbl_ajuda") and self._lbl_ajuda:
-                self._lbl_ajuda.pack(anchor="w", pady=(10, 0))
             for botao in self._btns_pgto.values():
                 botao.configure(font=("Segoe UI", 10, "bold"), pady=12)
                 botao.grid_configure(padx=4, pady=4)
@@ -2084,7 +2124,27 @@ class CaixaApp(tk.Tk):
         nova_data = agora.strftime("%d/%m/%Y")
         if nova_data != self._data_hoje and not self._carrinho:
             self._abrir_periodo_para_data(nova_data)
-        self.after(30000, self._atualizar_relogio)
+        self._clock_after_id = self.after(30000, self._atualizar_relogio)
+
+    def _focar_busca_inicial(self) -> None:
+        self._focus_after_id = None
+        if hasattr(self, "_entry_busca") and self._entry_busca.winfo_exists():
+            self._entry_busca.focus()
+
+    def destroy(self) -> None:
+        """Cancela callbacks pendentes antes de destruir a janela."""
+        for after_id in (
+            self._feedback_after_id,
+            self._focus_after_id,
+            self._manter_foco_after_id,
+            self._clock_after_id,
+        ):
+            if after_id:
+                try:
+                    self.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+        super().destroy()
 
     def _add_placeholder(self, entry: tk.Entry, text: str):
         """Simula placeholder em `Entry`, algo nativo ausente no Tkinter."""

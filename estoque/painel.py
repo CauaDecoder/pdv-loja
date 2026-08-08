@@ -9,19 +9,16 @@ import database as db
 from estoque import calculos
 from estoque import relatorio_estoque
 from app.ui.components import (
-    ActionButton,
     BaseModal,
     Card,
-    DataTable,
     EmptyState,
-    FocusHelper,
     LabeledField,
     PageHeader,
-    Panel,
     SearchInput,
     SectionHeader,
     StatusBadge,
     StyledEntry,
+    ToggleSwitch,
     action_button,
     confirmar_acao_sensivel,
 )
@@ -29,6 +26,9 @@ from tema import FONTES, ESPACOS, moeda, obter_tema_atual
 
 
 class PainelEstoque(tk.Frame):
+    KPI_MIN_CARD_WIDTH = 132
+    KPI_WIDE_MIN_WIDTH = 8 * KPI_MIN_CARD_WIDTH + 2 * ESPACOS["lg"]
+
     def __init__(self, parent):
         tema = obter_tema_atual()
         super().__init__(parent, bg=tema["bg"])
@@ -46,7 +46,13 @@ class PainelEstoque(tk.Frame):
         self._categorias = ["Todas"]
         self._fornecedores = ["Todos"]
         self._empty_state: EmptyState | None = None
+        self._filtros_collapsed = True
+        self._kpi_columns = 0
+        self._kpi_cards: list[Card] = []
+        self._kpi_title_labels: list[tk.Label] = []
+        self._filtros_after_id: str | None = None
         self._build_ui()
+        self.bind("<Destroy>", self._on_destroy, add="+")
         self.atualizar()
 
     def _build_ui(self):
@@ -62,8 +68,8 @@ class PainelEstoque(tk.Frame):
         ).pack(fill="x", padx=ESPACOS["lg"], pady=ESPACOS["lg"])
 
         # Cards compactos de indicadores (KPIs)
-        cards_frame = tk.Frame(self, bg=tema["bg"], padx=ESPACOS["lg"])
-        cards_frame.pack(fill="x", pady=(0, 12))
+        self._cards_frame = tk.Frame(self, bg=tema["bg"], padx=ESPACOS["lg"])
+        self._cards_frame.pack(fill="x", pady=(0, 12))
 
         kpi_config = (
             ("ativos", "SKUs ativos", "primary"),
@@ -76,9 +82,10 @@ class PainelEstoque(tk.Frame):
             ("valor_total_venda", "Valor a venda", "gold"),
         )
 
-        for chave, titulo, tipo_cor in kpi_config:
-            card = Card(cards_frame, padding=10)
-            card.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        for indice, (chave, titulo, tipo_cor) in enumerate(kpi_config):
+            card = Card(self._cards_frame, padding=10)
+            card.grid(row=0, column=indice, sticky="nsew", padx=(0, 6), pady=0)
+            self._kpi_cards.append(card)
 
             # Indicador de topo de card
             bar_color = (
@@ -96,26 +103,52 @@ class PainelEstoque(tk.Frame):
             )
             tk.Frame(card, bg=bar_color, height=3).pack(fill="x", pady=(0, 6))
 
-            tk.Label(card, text=titulo, bg=tema["surface"], fg=tema["text_muted"], font=FONTES["label_sm"]).pack(
-                anchor="w"
+            titulo_label = tk.Label(
+                card,
+                text=titulo,
+                bg=tema["surface"],
+                fg=tema["text_muted"],
+                font=FONTES["label_sm"],
             )
+            titulo_label.pack(anchor="w")
+            self._kpi_title_labels.append(titulo_label)
             lbl = tk.Label(card, text="0", bg=tema["surface"], fg=tema["text"], font=FONTES["numero_card"])
             lbl.pack(anchor="w", pady=(2, 0))
             self._resumo_labels[chave] = lbl
 
+        self._cards_frame.bind("<Configure>", self._ajustar_kpis)
+
+        self._paned = tk.PanedWindow(
+            self,
+            orient=tk.VERTICAL,
+            sashwidth=6,
+            sashrelief="flat",
+            bg=tema["border_soft"],
+            bd=0,
+            showhandle=False,
+        )
+        self._paned.pack(fill="both", expand=True)
+        self._top_pane = tk.Frame(self._paned, bg=tema["bg"])
+        self._paned.add(self._top_pane, minsize=88, stretch="never")
+
         # Card de Busca e Filtros
-        filtros_card = Card(self, padding=ESPACOS["lg"])
+        filtros_card = Card(self._top_pane, padding=ESPACOS["md"])
         filtros_card.pack(fill="x", padx=ESPACOS["lg"], pady=(0, ESPACOS["sm"]))
 
-        SectionHeader(
+        filtros_header = SectionHeader(
             filtros_card,
             "Busca e filtros",
-            "Localize rapidamente produtos ou filtre por categoria, curva ABC e status.",
-        ).pack(anchor="w", pady=(0, 8))
+            action_text="Mostrar filtros ▾",
+            action=self._toggle_filtros,
+            bg=tema["surface"],
+        )
+        filtros_header.pack(fill="x")
+        self._btn_toggle_filtros = filtros_header.action_button
+        self._filtros_content = tk.Frame(filtros_card, bg=tema["surface"])
 
         # Campo de Busca proeminente (SearchInput)
         self._search_input = SearchInput(
-            filtros_card,
+            self._filtros_content,
             textvariable=self._var_busca,
             placeholder="Buscar por código, código de barras ou nome do produto...",
             on_return=self._renderizar_tabela,
@@ -124,7 +157,7 @@ class PainelEstoque(tk.Frame):
         self._var_busca.trace_add("write", lambda *_: self._renderizar_tabela())
 
         # Controles de Filtro secundários
-        filtros_grid = tk.Frame(filtros_card, bg=tema["surface"])
+        filtros_grid = tk.Frame(self._filtros_content, bg=tema["surface"])
         filtros_grid.pack(fill="x", pady=(0, 8))
 
         # Configurar colunas responsivas
@@ -208,7 +241,7 @@ class PainelEstoque(tk.Frame):
         self._var_ativos.trace_add("write", lambda *_: self._renderizar_tabela())
 
         # Checkboxes secundários
-        filtros2 = tk.Frame(filtros_card, bg=tema["surface"])
+        filtros2 = tk.Frame(self._filtros_content, bg=tema["surface"])
         filtros2.pack(fill="x", pady=(6, 4))
         for i, (texto, var) in enumerate(
             (
@@ -217,25 +250,16 @@ class PainelEstoque(tk.Frame):
                 ("Sem movimentação recente", self._var_sem_movimento),
             )
         ):
-            cb = tk.Checkbutton(
+            cb = ToggleSwitch(
                 filtros2,
                 text=texto,
                 variable=var,
-                bg=tema["surface"],
-                fg=tema["text"],
-                selectcolor=tema["surface_3"],
-                activebackground=tema["surface"],
                 command=self._renderizar_tabela,
-                relief="flat",
-                padx=6,
-                pady=2,
-                font=FONTES["corpo"],
-                highlightthickness=0,
             )
             cb.grid(row=0, column=i, sticky="w", padx=(0, 14))
 
         self._lbl_resultados = tk.Label(
-            filtros_card,
+            self._filtros_content,
             text="0 produtos encontrados",
             bg=tema["surface"],
             fg=tema["text_muted"],
@@ -243,11 +267,13 @@ class PainelEstoque(tk.Frame):
         )
         self._lbl_resultados.pack(anchor="w", pady=(4, 0))
 
-        acoes_card = Card(self, padding=10)
+        acoes_card = Card(self._top_pane, padding=10)
         acoes_card.pack(fill="x", padx=ESPACOS["lg"], pady=(0, ESPACOS["sm"]))
 
         btn_box_top = tk.Frame(acoes_card, bg=tema["surface"])
         btn_box_top.pack(fill="x")
+        self._action_buttons: list[tk.Button] = []
+        self._action_columns = 0
 
         botoes_esquerda_top = [
             ("Novo Produto", "primary", self._novo_produto),
@@ -259,8 +285,8 @@ class PainelEstoque(tk.Frame):
         ]
 
         for texto, variant, cmd in botoes_esquerda_top:
-            action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=12, pady=7).pack(
-                side="left", padx=(0, 6)
+            self._action_buttons.append(
+                action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=12, pady=7)
             )
 
         botoes_direita_top = [
@@ -270,13 +296,16 @@ class PainelEstoque(tk.Frame):
         ]
 
         for texto, variant, cmd in botoes_direita_top:
-            action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=12, pady=7).pack(
-                side="right", padx=(6, 0)
+            self._action_buttons.append(
+                action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=12, pady=7)
             )
+        btn_box_top.bind("<Configure>", self._ajustar_acoes)
 
         # Tabela de Produtos (Container)
-        self._tabela_box = Card(self, padding=0)
-        self._tabela_box.pack(fill="both", expand=True, padx=ESPACOS["lg"])
+        self._table_pane = tk.Frame(self._paned, bg=tema["bg"], padx=ESPACOS["lg"])
+        self._paned.add(self._table_pane, minsize=200, stretch="always")
+        self._tabela_box = Card(self._table_pane, padding=0)
+        self._tabela_box.pack(fill="both", expand=True)
 
         colunas = ("codigo", "produto", "categoria", "qtd", "minimo", "pedido", "abc", "demanda", "status", "ativo")
         self._tree = ttk.Treeview(self._tabela_box, columns=colunas, show="headings", height=20)
@@ -329,42 +358,83 @@ class PainelEstoque(tk.Frame):
             action_text="Limpar Filtros",
             action=self._limpar_filtros,
         )
+        self._agendar_ajuste_divisor()
 
-        # Barra de Ações Operacionais (Rodapé)
-        acoes_frame = tk.Frame(self, bg=tema["bg"], padx=ESPACOS["lg"], pady=12)
-        acoes_frame.pack(fill="x")
 
-        # Flex-like container para botões operacionais
-        btn_box = tk.Frame(acoes_frame, bg=tema["bg"])
-        btn_box.pack(fill="x")
+    def _toggle_filtros(self) -> None:
+        self._filtros_collapsed = not self._filtros_collapsed
+        if self._filtros_collapsed:
+            self._filtros_content.pack_forget()
+            self._btn_toggle_filtros.configure(text="Mostrar filtros ▾")
+            self._agendar_ajuste_divisor()
+            return
+        self._filtros_content.pack(fill="x", pady=(10, 0))
+        self._btn_toggle_filtros.configure(text="Ocultar filtros ▴")
+        self._search_input.entry.focus_set()
+        self._agendar_ajuste_divisor()
 
-        botoes_esquerda = [
-            ("Novo Produto", "primary", self._novo_produto),
-            ("Entrada", "primary", self._entrada),
-            ("Inventário", "secondary", self._ajuste),
-            ("Editar Cadastro", "secondary", self._editar_cadastro),
-            ("Detalhes", "secondary", self._abrir_detalhe),
-            ("Movimentações", "secondary", self._abrir_movimentacoes),
-        ]
+    def _agendar_ajuste_divisor(self) -> None:
+        if self._filtros_after_id:
+            self.after_cancel(self._filtros_after_id)
+        self._filtros_after_id = self.after_idle(self._ajustar_divisor_filtros)
 
-        for texto, variant, cmd in botoes_esquerda:
-            action_button(btn_box, text=texto, command=cmd, variant=variant, padx=14, pady=8).pack(
-                side="left", padx=(0, 6)
+    def _ajustar_divisor_filtros(self) -> None:
+        self._filtros_after_id = None
+        self.update_idletasks()
+        altura = self._top_pane.winfo_reqheight()
+        self._paned.paneconfigure(self._top_pane, minsize=altura)
+        self._paned.sash_place(0, 0, altura)
+
+    def _on_destroy(self, event) -> None:
+        if event.widget is self and self._filtros_after_id:
+            self.after_cancel(self._filtros_after_id)
+            self._filtros_after_id = None
+
+    def _ajustar_kpis(self, event) -> None:
+        colunas = 4 if event.width < self.KPI_WIDE_MIN_WIDTH else 8
+        if colunas == self._kpi_columns:
+            return
+        self._kpi_columns = colunas
+        for coluna in range(8):
+            self._cards_frame.columnconfigure(coluna, weight=1 if coluna < colunas else 0)
+        compacto = colunas == 4
+        for indice, card in enumerate(self._kpi_cards):
+            card.grid_configure(
+                row=indice // colunas,
+                column=indice % colunas,
+                padx=(0, 6),
+                pady=(0, 6) if compacto else 0,
             )
+            card.configure(padx=6 if compacto else 10, pady=6 if compacto else 10)
+        for label in self._resumo_labels.values():
+            label.configure(font=("Segoe UI", 12 if compacto else 15, "bold"))
 
-        botoes_direita = [
-            ("Perda", "danger", self._perda),
-            ("Inativar/Reativar", "gold", self._alternar_ativo),
-            ("Exportar XLSX", "ghost", self._exportar),
-        ]
-
-        for texto, variant, cmd in botoes_direita:
-            action_button(btn_box, text=texto, command=cmd, variant=variant, padx=14, pady=8).pack(
-                side="right", padx=(6, 0)
-            )
-
-        # Acoes ja ficam na barra superior; esconder duplicata libera altura para produtos.
-        acoes_frame.pack_forget()
+    def _ajustar_acoes(self, event) -> None:
+        colunas = 5 if event.width < 1000 else 10
+        if colunas == self._action_columns:
+            return
+        self._action_columns = colunas
+        for coluna in range(10):
+            event.widget.columnconfigure(coluna, weight=0)
+        for indice, botao in enumerate(self._action_buttons):
+            botao.grid_forget()
+            if colunas == 5:
+                botao.grid(
+                    row=indice // colunas,
+                    column=indice % colunas,
+                    sticky="ew",
+                    padx=(0, 6),
+                    pady=(0, 6),
+                )
+            else:
+                coluna = indice if indice < 6 else indice + 1
+                botao.grid(row=0, column=coluna, sticky="ew", padx=(0, 6))
+        if colunas == 5:
+            for coluna in range(5):
+                event.widget.columnconfigure(coluna, weight=1)
+        else:
+            event.widget.columnconfigure(6, weight=1)
+        self._agendar_ajuste_divisor()
 
     def _configurar_tags_tabela(self):
         tema = obter_tema_atual()

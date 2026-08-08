@@ -72,8 +72,113 @@ class VendaVarianteAUITest(unittest.TestCase):
 
             self.assertEqual(len(app._carrinho), 1)
             self.assertEqual(app._carrinho[0]["estoque"], 3)
-            # Verifica texto do aux no card de status
-            self.assertIn("3 produtos restantes", app._lbl_status_aux.cget("text"))
+            badges = [widget.cget("text") for widget in app._status_pills.winfo_children()]
+            self.assertIn("1 alerta de estoque baixo", badges)
+        finally:
+            app.destroy()
+
+    def test_carrinho_reutiliza_linha_ao_alterar_quantidade(self):
+        """Alterar quantidade mantém a linha visual existente do produto."""
+        try:
+            app = CaixaApp()
+            app.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            produto = dict(database.buscar_produto("P1")[0])
+            app._adicionar_produto(produto)
+            row = app._cart_rows[produto["id"]].row
+            app._adicionar_produto(produto)
+
+            self.assertIs(app._cart_rows[produto["id"]].row, row)
+            self.assertEqual(
+                app._cart_rows[produto["id"]].quantidade.cget("text"),
+                "2 un.",
+            )
+        finally:
+            app.destroy()
+
+    def test_layout_alterna_altura_compacta_sem_atributos_obsoletos(self):
+        """Redimensionar a Tela de venda não depende de widgets removidos."""
+        try:
+            app = CaixaApp()
+            app.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            app.deiconify()
+            app.geometry("1366x728")
+            app.update()
+            app._ajustar_layout_responsivo()
+            self.assertTrue(app._compacto_altura)
+
+            app.geometry("1366x800")
+            app.update()
+            app._ajustar_layout_responsivo()
+            self.assertFalse(app._compacto_altura)
+        finally:
+            app.destroy()
+
+    def test_todas_as_abas_renderizam_em_resolucoes_operacionais(self):
+        """Abas principais e de estoque renderizam nas duas resoluções alvo."""
+        try:
+            app = CaixaApp()
+            app.deiconify()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            for geometria in ("1366x768", "900x650"):
+                app.geometry(geometria)
+                app.update()
+                for tab_id in app._notebook.tabs():
+                    app._notebook.select(tab_id)
+                    app.update()
+                    self.assertEqual(app._notebook.select(), tab_id)
+                app._notebook.select(app._aba_estoque)
+                for tab_id in app._estoque_notebook.tabs():
+                    app._estoque_notebook.select(tab_id)
+                    app.update()
+                    self.assertEqual(app._estoque_notebook.select(), tab_id)
+        finally:
+            app.destroy()
+
+    def test_carrinho_renderiza_dez_itens_sem_recriar_linhas(self):
+        """Carrinho com dez produtos atualiza quantidades preservando suas linhas."""
+        try:
+            app = CaixaApp()
+            app.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            app._carrinho = [
+                {
+                    "produto_id": indice,
+                    "codigo": f"P{indice}",
+                    "nome": f"Produto {indice}",
+                    "quantidade": 1,
+                    "preco_unit": 10.0,
+                    "estoque": 20,
+                }
+                for indice in range(1, 11)
+            ]
+            app._renderizar_carrinho()
+            linhas = {produto_id: widgets.row for produto_id, widgets in app._cart_rows.items()}
+
+            for item in app._carrinho:
+                item["quantidade"] = 2
+            app._renderizar_carrinho()
+
+            self.assertEqual(len(app._cart_rows), 10)
+            for produto_id, row in linhas.items():
+                self.assertIs(app._cart_rows[produto_id].row, row)
         finally:
             app.destroy()
 
@@ -225,7 +330,7 @@ class VendaVarianteAUITest(unittest.TestCase):
                         controles[widget.cget("text")] = widget
                     if isinstance(widget, tk.Button):
                         botoes.append(widget)
-                controles["Dinheiro"].invoke()
+                controles["Débito"].invoke()
                 controles["Pix"].invoke()
                 confirmar = next(
                     botao for botao in botoes
@@ -241,7 +346,7 @@ class VendaVarianteAUITest(unittest.TestCase):
                 ["Dinheiro", "Débito", "Crédito", "Pix"],
             )
             self.assertEqual(app._pagamento, "Mais de uma forma")
-            self.assertEqual(app._pagamento_detalhe, "Dinheiro + Pix")
+            self.assertEqual(app._pagamento_detalhe, "Debito (Visa) + Pix")
         finally:
             app.destroy()
 
@@ -255,9 +360,10 @@ class VendaVarianteAUITest(unittest.TestCase):
             return
 
         try:
-            self.assertEqual(app._btns_pgto["Debito"].cget("text"), "Cartão de débito")
-            self.assertEqual(app._btns_pgto["Credito"].cget("text"), "Cartão de crédito")
-            self.assertNotIn("?", app._lbl_ajuda.cget("text"))
+            self.assertIn("Débito", app._btns_pgto["Debito"].cget("text"))
+            self.assertIn("Crédito", app._btns_pgto["Credito"].cget("text"))
+            for botao in app._btns_pgto.values():
+                self.assertNotIn("?", botao.cget("text"))
         finally:
             app.destroy()
 

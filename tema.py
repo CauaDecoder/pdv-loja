@@ -182,7 +182,7 @@ BUTTON_STYLES = {
     },
 }
 
-INPUT_STYLES = {"bg": TEMA_CLARO["surface_3"], "fg": TEMA_CLARO["text"], "border": BORDER_COLOR}
+INPUT_STYLES = {"bg": TEMA_CLARO["surface"], "fg": TEMA_CLARO["text"], "border": BORDER_LIGHT}
 TABLE_STYLES = {"header_bg": TEMA_CLARO["surface_2"], "header_fg": TEMA_CLARO["text"], "row_height": 34}
 
 NOME_TEMA_ATUAL = "claro"

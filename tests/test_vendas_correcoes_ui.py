@@ -185,7 +185,7 @@ class VendasCorrecoesUITest(unittest.TestCase):
 
         try:
             view = VendasCorrecoesView(root)
-            self.assertIsNotNone(view._tree)
+            self.assertIsNotNone(view._tabela_body)
             # Banco vazio deve permanecer vazio: a integracao nao usa mocks.
             self.assertEqual(view._vendas_carregadas, [])
         finally:
@@ -321,8 +321,7 @@ class VendasCorrecoesUITest(unittest.TestCase):
                 alterar_pagamento.assert_called_once()
                 sub_pagamento.destroy()
 
-                modal._tree_items.selection_set("1")
-                modal._alterar_quantidade()
+                modal._alterar_quantidade(1)
                 sub_quantidade = next(
                     filho for filho in modal.winfo_children() if isinstance(filho, tk.Toplevel)
                 )
@@ -336,8 +335,7 @@ class VendasCorrecoesUITest(unittest.TestCase):
                 alterar_quantidade.assert_called_once()
                 sub_quantidade.destroy()
 
-                modal._tree_items.selection_set("1")
-                modal._remover_item()
+                modal._remover_item(1)
                 remover_item.assert_called_once_with(
                     periodo_id=2,
                     num_venda=10,
