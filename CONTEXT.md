@@ -4,6 +4,26 @@ Aplicacao de PDV e estoque para a operacao diaria da Loja da Basilica.
 
 ## Language
 
+**Loja**:
+Operacao fisica unica que compartilha produtos, estoque, periodos e historico entre seus usuarios e Terminais.
+_Avoid_: unidade, filial
+
+**Terminal**:
+Computador registrado que acessa o PDV em nome da Loja. Um Terminal pode ser designado como Terminal de venda, mas sua identidade nao substitui a do Operador.
+_Avoid_: computador, maquina, caixa
+
+**Operador**:
+Pessoa autenticada e individualmente identificada como responsavel por uma acao no PDV.
+_Avoid_: usuario compartilhado, atendente anonimo
+
+**Periodo da Loja**:
+Intervalo operacional compartilhado pela Loja entre abertura e fechamento, ao qual as Vendas no caixa sao vinculadas.
+_Avoid_: periodo do Terminal, sessao do Operador
+
+**Venda pendente de sincronizacao**:
+Venda no caixa concluida durante contingencia offline e ainda nao confirmada pela fonte central, preservada para envio posterior sem perder sua identidade ou historico.
+_Avoid_: venda temporaria, rascunho de venda
+
 **Venda no caixa**:
 Fluxo principal de atendimento no balcao, em que o operador busca produtos, monta o carrinho, escolhe a forma de pagamento e finaliza a venda.
 _Avoid_: venda, pedido
