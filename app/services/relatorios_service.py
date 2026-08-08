@@ -7,7 +7,7 @@ from typing import Any
 
 import database
 from estoque.relatorio_estoque import gerar_posicao_estoque
-from relatorio import gerar_relatorio
+from app.services.relatorio import gerar_relatorio
 
 
 def obter_fechamento_financeiro(periodo_id: int) -> dict[str, Any]:
