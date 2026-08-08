@@ -7,7 +7,7 @@ from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Callable, Sequence
 
-from tema import (
+from app.ui.theme import (
     CARD_PADDING,
     FONTES,
     obter_nome_tema_atual,

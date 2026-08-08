@@ -5,8 +5,8 @@ import tkinter as tk
 import tempfile
 from pathlib import Path
 
-import database
-import tema
+from app import database
+from app.ui import theme as tema
 from app.ui import components
 from app.ui.app_window import CaixaApp
 

@@ -1,5 +1,5 @@
 """
-database.py - Gerenciamento do banco SQLite local
+Gerenciamento do banco SQLite local.
 Basilica Menor Nossa Senhora das Dores - Sistema de Caixa
 """
 
@@ -12,7 +12,9 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-DB_PATH = Path(__file__).parent / "data" / "loja.db"
+from app.paths import DATA_DIR
+
+DB_PATH = DATA_DIR / "loja.db"
 
 CONFIG_PADRAO = {
     "abc_metodo": ("valor_estoque", "Metodo ABC: valor_estoque ou receita_vendas"),
@@ -547,7 +549,7 @@ def _validar_mapeamento_estoque(colunas: list[str], mapa: dict[str, str]):
     if "disponivel" in colunas_normalizadas and "estoque" not in mapa:
         raise ValueError(
             'A coluna "Disponivel" foi encontrada, mas nao foi mapeada como estoque. '
-            "Verifique o mapeamento em database.py antes de importar."
+            "Verifique o mapeamento em app/database.py antes de importar."
         )
 
 
@@ -1580,7 +1582,7 @@ def obter_movimentacoes_produto(produto_id: int, limite: int = 80) -> list[sqlit
 
 
 def _indicadores_dashboard() -> list[dict]:
-    from estoque import calculos
+    from app.estoque import calculos
 
     produtos = listar_produtos_estoque(incluir_inativos=True)
     config = configuracoes()

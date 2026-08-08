@@ -7,6 +7,8 @@ data/*.db-shm
 data/*.db-wal
 data/*.sqlite
 data/*.sqlite3
+data/imports/*
+!data/imports/.gitkeep
 __pycache__/
 *.py[cod]
 *.pyo
@@ -36,11 +38,4 @@ docs/specs/
 docs/prototypes/
 docs/validation/
 docs/ux-redesign-direction.md
-products.csv
-products2.csv
-products4.csv
-products5.csv
-Products4.csv
-Products5.csv
-produtos3.csv
 handoff-design-frontend-pdv.md

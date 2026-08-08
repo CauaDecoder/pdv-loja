@@ -1,8 +1,8 @@
 import tempfile
 from pathlib import Path
 
-import database
-from estoque import calculos
+from app import database
+from app.estoque import calculos
 
 
 DISPONIVEL = "Dispon\u00edvel"

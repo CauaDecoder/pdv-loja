@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import database
+from app import database
 
 
 class ImportacaoContaAzulTest(unittest.TestCase):

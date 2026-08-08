@@ -6,6 +6,8 @@ import csv
 import re
 from pathlib import Path
 
+from app.paths import IMPORTS_DIR
+
 
 def higienizar_produtos(entrada: Path, saida: Path) -> None:
     """Higieniza produtos e grava um CSV compatível com o importador legado."""
@@ -43,7 +45,10 @@ def higienizar_produtos(entrada: Path, saida: Path) -> None:
 
 def main() -> None:
     """Executa a conversão usando os caminhos padrão do projeto."""
-    higienizar_produtos(Path("products.csv"), Path("produtos_limpo.csv"))
+    higienizar_produtos(
+        IMPORTS_DIR / "products.csv",
+        IMPORTS_DIR / "produtos_limpo.csv",
+    )
     print("Higienização concluída! O arquivo 'produtos_limpo.csv' foi gerado.")
 
 

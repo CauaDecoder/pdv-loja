@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import database
-from estoque.relatorio_estoque import gerar_posicao_estoque
+from app import database
+from app.estoque.relatorio_estoque import gerar_posicao_estoque
 from app.services.relatorio import gerar_relatorio
 
 

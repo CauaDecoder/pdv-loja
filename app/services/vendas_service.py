@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from app.payments import PAYMENT_METHODS
-from database import _registrar_movimentacao_estoque, get_conn, registrar_venda
+from app.database import _registrar_movimentacao_estoque, get_conn, registrar_venda
 
 STATUS_VALIDOS = {"valid", "corrected", "cancelled"}
 ACOES_CORRECAO = [

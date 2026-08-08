@@ -11,6 +11,7 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python main.py
+# ou: python -m app
 ```
 
 O banco principal fica em `data/loja.db`. As dependencias declaradas sao `openpyxl`, `matplotlib` e `pytest`.
@@ -18,10 +19,16 @@ O banco principal fica em `data/loja.db`. As dependencias declaradas sao `openpy
 ## Organizacao
 
 ```text
-main.py                         ponto de entrada compativel
-database.py                     persistencia SQLite e consultas existentes
+main.py                         entrypoint compativel
 app/
-|- main.py                      ponto de entrada do pacote
+|- __main__.py                  entrypoint para python -m app
+|- database.py                  persistencia SQLite
+|- paths.py                     caminhos operacionais centralizados
+|- estoque/
+|  |- painel.py                 manutencao e movimentacoes
+|  |- dashboard.py              indicadores e graficos
+|  |- calculos.py                regras de estoque
+|  `- relatorio_estoque.py      exportacao da posicao
 |- services/
 |  |- backup_service.py         backup e restauracao SQLite
 |  |- importacao_service.py     fachada da importacao
@@ -29,16 +36,17 @@ app/
 |  |- estoque_service.py        fachada incremental de estoque
 |  `- relatorios_service.py     fachada incremental de relatorios
 `- ui/
+   |- theme.py                  tokens e estilos visuais
    |- app_window.py             janela principal e telas legadas
    `- importacao_dialog.py      conferencia da importacao
-estoque/
-|- painel.py                    manutencao e movimentacoes
-|- dashboard.py                 indicadores e graficos
-|- calculos.py                  regras de estoque
-`- relatorio_estoque.py         exportacao da posicao
+data/
+`- imports/                     planilhas e CSVs de entrada
+scripts/
+`- higienizar_produtos.py       conversor de exportacao Conta Azul
+relatorios/                     planilhas geradas pelo PDV
 ```
 
-A refatoracao e incremental: imports antigos continuam funcionando, enquanto novas regras e telas passam a viver em modulos menores. O `main.py` raiz agora apenas cria `CaixaApp` e inicia o loop da interface.
+O codigo da aplicacao fica integralmente no pacote `app`. O `main.py` raiz apenas delega ao entrypoint do pacote.
 
 ## Importacao de produtos
 
@@ -53,6 +61,12 @@ Mapeamento Conta Azul:
 - `Reservado` -> nao altera o estoque disponivel
 
 A linha final `CUSTO TOTAL` nunca e importada como produto.
+
+Para converter uma exportacao legada em `data/imports/`, execute:
+
+```powershell
+python -m scripts.higienizar_produtos
+```
 
 Modos disponiveis:
 

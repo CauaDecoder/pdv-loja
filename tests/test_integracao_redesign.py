@@ -2,7 +2,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-import database
+from app import database
 from app.services import relatorios_service, vendas_service
 
 

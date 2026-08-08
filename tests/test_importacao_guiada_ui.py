@@ -5,7 +5,7 @@ import tkinter as tk
 import tempfile
 from pathlib import Path
 
-import database
+from app import database
 from app.ui.importacao_view import ImportacaoGuidedView
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-import database
+from app import database
 from app.services import relatorios_service, vendas_service
 
 

@@ -3,7 +3,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-import database
+from app import database
 from app.services import vendas_service
 
 

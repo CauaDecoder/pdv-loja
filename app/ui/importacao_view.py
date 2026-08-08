@@ -10,7 +10,7 @@ from typing import Callable
 
 from app.services import importacao_service
 from app.ui.components import Card, PageHeader, SectionHeader, StatusBadge, action_button
-from tema import FONTES, TEMA_ATUAL, moeda
+from app.ui.theme import FONTES, TEMA_ATUAL, moeda
 
 
 class ImportacaoGuidedView(tk.Frame):

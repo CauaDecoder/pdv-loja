@@ -34,7 +34,7 @@ from app.ui.components import (
     bind_escape_to_close,
     confirmar_acao_sensivel,
 )
-from tema import FONTES, TEMA_ATUAL, moeda
+from app.ui.theme import FONTES, TEMA_ATUAL, moeda
 
 def ler_quantidade(valor: str) -> int:
     """Converte quantidade informada pela UI com mensagem operacional clara."""

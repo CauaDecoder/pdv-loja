@@ -6,8 +6,8 @@ import tempfile
 from pathlib import Path
 from tkinter import ttk
 
-import database
-import tema
+from app import database
+from app.ui import theme as tema
 from app.ui import components
 
 
@@ -241,7 +241,7 @@ class SistemaVisualTest(unittest.TestCase):
             try:
                 database.inicializar()
                 components.configure_styles(root)
-                from estoque.painel import PainelEstoque
+                from app.estoque.painel import PainelEstoque
 
                 painel = PainelEstoque(root)
                 painel.pack(fill="both", expand=True)

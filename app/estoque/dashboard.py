@@ -5,10 +5,10 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-import database as db
-import tema as theme
+from app import database as db
+from app.ui import theme
 from app.ui.components import Card, EmptyState, PageHeader
-from tema import (
+from app.ui.theme import (
     ESPACOS,
     FONTES,
     moeda,

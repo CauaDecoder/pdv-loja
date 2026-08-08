@@ -1,11 +1,6 @@
-"""Ponto de entrada do pacote da aplicacao."""
+"""Entrypoint compativel para ``python -m app.main``."""
 
-from app.ui.app_window import CaixaApp
-
-
-def main():
-    app = CaixaApp()
-    app.mainloop()
+from app.__main__ import main
 
 
 if __name__ == "__main__":

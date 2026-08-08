@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import database as db
+from app import database as db
 
 
 MODOS = {

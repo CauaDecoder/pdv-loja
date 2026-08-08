@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.formatting import moeda
+
 # Tokens base inspirados na Variante A "Command Center"
 TEMA_CLARO = {
     # Cores de superficie e fundo
@@ -310,7 +312,3 @@ PGTO_FG = {
     "Dinheiro": TEMA_ATUAL["gold"],
     "Mais de uma forma": TEMA_ATUAL["purple_fg"],
 }
-
-
-def moeda(valor: float) -> str:
-    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")

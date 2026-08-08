@@ -5,9 +5,9 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-import database as db
-from estoque import calculos
-from estoque import relatorio_estoque
+from app import database as db
+from app.estoque import calculos
+from app.estoque import relatorio_estoque
 from app.ui.components import (
     BaseModal,
     Card,
@@ -22,7 +22,7 @@ from app.ui.components import (
     action_button,
     confirmar_acao_sensivel,
 )
-from tema import FONTES, ESPACOS, moeda, obter_tema_atual
+from app.ui.theme import FONTES, ESPACOS, moeda, obter_tema_atual
 
 
 class PainelEstoque(tk.Frame):

@@ -10,9 +10,9 @@ principal do sistema:
 4. Abre e encerra periodos, exporta relatorios e importa produtos.
 
 Dependencias de negocio:
-- `database.py`: persistencia, consultas e registro das vendas.
+- `app/database.py`: persistencia, consultas e registro das vendas.
 - `relatorio.py`: geracao do arquivo final do periodo.
-- `estoque/painel.py`: painel visual de manutencao do estoque.
+- `app/estoque/painel.py`: painel visual de manutencao do estoque.
 
 Execucao: `python main.py`
 Requisitos: Python 3.10+, openpyxl
@@ -24,8 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-import database as db
-import tema as theme
+from app import database as db
 from app.payments import (
     CARD_BRANDS,
     CARD_INSTALLMENTS,
@@ -39,8 +38,10 @@ from app.services import backup_service, importacao_service, relatorios_service
 from app.ui.importacao_view import ImportacaoGuidedView
 from app.ui.relatorios_view import RelatoriosView
 from app.ui.vendas_correcoes_view import VendasCorrecoesView
-from estoque.dashboard import DashboardEstoque
-from estoque.painel import PainelEstoque
+from app.estoque.dashboard import DashboardEstoque
+from app.estoque.painel import PainelEstoque
+from app.paths import BACKUPS_DIR, REPORTS_DIR
+from app.ui import theme
 from app.ui.components import (
     BaseModal,
     Card,
@@ -58,18 +59,13 @@ from app.ui.components import (
     bind_escape_to_close,
     configure_styles,
 )
-from tema import (
+from app.ui.theme import (
     FONTES,
     definir_tema_atual,
     moeda,
     obter_nome_tema_atual,
 )
 PLACEHOLDER_BUSCA = "Escaneie o código ou busque pelo nome"
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RELATORIOS_DIR = PROJECT_ROOT / "relatorios"
-BACKUPS_DIR = PROJECT_ROOT / "backups"
-
-
 @dataclass(slots=True)
 class CartRowWidgets:
     """Mantém referências dos widgets mutáveis de uma linha do carrinho."""
@@ -1712,7 +1708,7 @@ class CaixaApp(tk.Tk):
             messagebox.showerror("Erro", "Nao foi possivel localizar o periodo atual do caixa.")
             return
 
-        caminho = self._exportar_periodo(str(RELATORIOS_DIR))
+        caminho = self._exportar_periodo(str(REPORTS_DIR))
         teve_vendas = caminho is not None
 
         db.encerrar_periodo(self._periodo_id)

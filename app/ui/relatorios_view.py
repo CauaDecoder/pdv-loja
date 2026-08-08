@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
-import database
+from app import database
 from app.services import relatorios_service
 from app.ui.components import (
     Card,
@@ -23,8 +23,8 @@ from app.ui.components import (
     StatusBadge,
     action_button,
 )
-from estoque.relatorio_estoque import gerar_posicao_estoque
-from tema import FONTES, TEMA_ATUAL, moeda
+from app.estoque.relatorio_estoque import gerar_posicao_estoque
+from app.ui.theme import FONTES, TEMA_ATUAL, moeda
 
 
 class RelatoriosView(tk.Frame):

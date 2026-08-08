@@ -1,6 +1,6 @@
 """Fachada incremental para operacoes de estoque."""
 
-from database import (
+from app.database import (
     ajustar_estoque_por_contagem,
     registrar_entrada_estoque,
     registrar_movimentacao_estoque,
