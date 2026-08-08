@@ -279,7 +279,7 @@ class PainelEstoque(tk.Frame):
         self._tabela_box.pack(fill="both", expand=True, padx=ESPACOS["lg"])
 
         colunas = ("codigo", "produto", "categoria", "qtd", "minimo", "pedido", "abc", "demanda", "status", "ativo")
-        self._tree = ttk.Treeview(self._tabela_box, columns=colunas, show="headings", height=14)
+        self._tree = ttk.Treeview(self._tabela_box, columns=colunas, show="headings", height=20)
         titulos = {
             "codigo": "Cód.",
             "produto": "Produto",
@@ -362,6 +362,9 @@ class PainelEstoque(tk.Frame):
             action_button(btn_box, text=texto, command=cmd, variant=variant, padx=14, pady=8).pack(
                 side="right", padx=(6, 0)
             )
+
+        # Acoes ja ficam na barra superior; esconder duplicata libera altura para produtos.
+        acoes_frame.pack_forget()
 
     def _configurar_tags_tabela(self):
         tema = obter_tema_atual()

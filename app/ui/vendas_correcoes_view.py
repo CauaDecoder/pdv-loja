@@ -241,8 +241,16 @@ class VendasCorrecoesView(tk.Frame):
             sold_at = v.get("sold_at", {})
             dt_str = f"{sold_at.get('date', '')} {sold_at.get('time', '')}".strip()
 
-            row = tk.Frame(self._tabela_body, bg=TEMA_ATUAL["surface"], pady=8, padx=12)
-            row.pack(fill="x", borderwidth=0, highlightthickness=1, highlightbackground=TEMA_ATUAL["border_soft"])
+            row = tk.Frame(
+                self._tabela_body,
+                bg=TEMA_ATUAL["surface"],
+                pady=8,
+                padx=12,
+                borderwidth=0,
+                highlightthickness=1,
+                highlightbackground=TEMA_ATUAL["border_soft"],
+            )
+            row.pack(fill="x")
             
             row.columnconfigure(0, minsize=90)
             row.columnconfigure(1, minsize=110)
@@ -251,12 +259,12 @@ class VendasCorrecoesView(tk.Frame):
             row.columnconfigure(4, minsize=120)
             row.columnconfigure(5, minsize=130)
             
-            tk.Label(row, text=f"#{v.get('sale_number', 0):03d}", bg=TEMA_ATUAL["surface"], font=FONTES["corpo_bold"]).grid(row=0, column=0, sticky="w")
-            tk.Label(row, text=dt_str, bg=TEMA_ATUAL["surface"]).grid(row=0, column=1, sticky="w")
+            tk.Label(row, text=f"#{v.get('sale_number', 0):03d}", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text"], font=FONTES["corpo_bold"]).grid(row=0, column=0, sticky="w")
+            tk.Label(row, text=dt_str, bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text"]).grid(row=0, column=1, sticky="w")
             
             resumo_text = f"{v.get('item_summary', {}).get('label', '')} - {v.get('responsible', '')}"
-            tk.Label(row, text=resumo_text, bg=TEMA_ATUAL["surface"]).grid(row=0, column=2, sticky="w")
-            tk.Label(row, text=v.get("payment_summary", ""), bg=TEMA_ATUAL["surface"]).grid(row=0, column=3, sticky="w")
+            tk.Label(row, text=resumo_text, bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text"]).grid(row=0, column=2, sticky="w")
+            tk.Label(row, text=v.get("payment_summary", ""), bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text"]).grid(row=0, column=3, sticky="w")
             
             if s_code == "valid":
                 badge = StatusBadge(row, "Válida", "OK")
@@ -441,8 +449,16 @@ class VendaDetailModal(tk.Toplevel):
             tk.Label(hdr_itens, text=text, bg=TEMA_ATUAL["surface_2"], fg=TEMA_ATUAL["texto_suave"], font=FONTES["label_sm"]).grid(row=0, column=i, sticky="w")
             
         for item in det.get("items", []):
-            row = tk.Frame(card_itens, bg=TEMA_ATUAL["surface"], pady=6, padx=8)
-            row.pack(fill="x", borderwidth=0, highlightthickness=1, highlightbackground=TEMA_ATUAL["border_soft"])
+            row = tk.Frame(
+                card_itens,
+                bg=TEMA_ATUAL["surface"],
+                pady=6,
+                padx=8,
+                borderwidth=0,
+                highlightthickness=1,
+                highlightbackground=TEMA_ATUAL["border_soft"],
+            )
+            row.pack(fill="x")
             row.columnconfigure(0, weight=1)
             row.columnconfigure(1, minsize=60)
             row.columnconfigure(2, minsize=100)
@@ -450,9 +466,9 @@ class VendaDetailModal(tk.Toplevel):
             
             line_id = item.get("line_id", 0)
             
-            tk.Label(row, text=f"{item.get('code', '')} - {item.get('name', '')}", bg=TEMA_ATUAL["surface"]).grid(row=0, column=0, sticky="w")
-            tk.Label(row, text=str(item.get("quantity", 0)), bg=TEMA_ATUAL["surface"]).grid(row=0, column=1, sticky="w")
-            tk.Label(row, text=moeda(float(item.get("subtotal", 0))), bg=TEMA_ATUAL["surface"]).grid(row=0, column=2, sticky="w")
+            tk.Label(row, text=f"{item.get('code', '')} - {item.get('name', '')}", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text"]).grid(row=0, column=0, sticky="w")
+            tk.Label(row, text=str(item.get("quantity", 0)), bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text"]).grid(row=0, column=1, sticky="w")
+            tk.Label(row, text=moeda(float(item.get("subtotal", 0))), bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text"]).grid(row=0, column=2, sticky="w")
             
             acts = tk.Frame(row, bg=TEMA_ATUAL["surface"])
             acts.grid(row=0, column=3, sticky="e")

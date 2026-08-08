@@ -11,3 +11,8 @@ This repo uses the default triage labels: `needs-triage`, `needs-info`, `ready-f
 ### Domain docs
 
 This is a single-context repo. Engineering skills should read root `CONTEXT.md` and relevant ADRs under `docs/adr/` when present. See `docs/agents/domain.md`.
+
+### Communication style
+
+Usar sempre modo caveman (skill caveman - intensidade full). Respostas concisas, sem rodeios ou artigos desnecessários, mantendo precisão técnica total. Se usuário falar português, responder em caveman português.
+

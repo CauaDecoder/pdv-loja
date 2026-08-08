@@ -29,6 +29,13 @@ desktop.ini
 relatorios/*.xlsx
 backups/
 *.log
+*.xlsx
+py.cmd
+.scratch/
+docs/specs/
+docs/prototypes/
+docs/validation/
+docs/ux-redesign-direction.md
 products.csv
 products2.csv
 products4.csv

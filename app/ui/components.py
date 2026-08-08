@@ -533,8 +533,9 @@ class StatusBadge(tk.Label):
             "VALIDA": (tema["primary"], tema["primary_soft"]),
         }
         default_fg, default_bg = badge_map.get(text, (tema["text"], tema["surface_2"]))
-        final_fg = fg or default_fg
-        final_bg = bg or default_bg
+        variant_fg, variant_bg = badge_map.get(bg, (None, None))
+        final_fg = fg or variant_fg or default_fg
+        final_bg = variant_bg or bg or default_bg
         super().__init__(parent, text=text, bg=final_bg, fg=final_fg, font=FONTES["label_sm"], padx=8, pady=3)
 
 

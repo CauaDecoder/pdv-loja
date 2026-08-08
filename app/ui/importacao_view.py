@@ -50,8 +50,17 @@ class ImportacaoGuidedView(tk.Frame):
         self._build_stepper()
 
         # --- CONTEÚDO DA ETAPA ATUAL ---
-        self._container_etapa = tk.Frame(self, bg=TEMA_ATUAL["fundo"])
-        self._container_etapa.pack(fill="both", expand=True, pady=(0, 14))
+        container_scroll = tk.Frame(self, bg=TEMA_ATUAL["fundo"])
+        container_scroll.pack(fill="both", expand=True, pady=(0, 14))
+        canvas = tk.Canvas(container_scroll, bg=TEMA_ATUAL["fundo"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container_scroll, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        self._container_etapa = tk.Frame(canvas, bg=TEMA_ATUAL["fundo"])
+        canvas_window = canvas.create_window((0, 0), window=self._container_etapa, anchor="nw")
+        self._container_etapa.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
         if self._resultado_importacao:
             self._render_resultado_sucesso()
@@ -246,6 +255,9 @@ class ImportacaoGuidedView(tk.Frame):
             text="⬅ Voltar (Arquivo)",
             command=lambda: self._ir_para_etapa(1),
             variant="secondary",
+            font=FONTES["secao"],
+            padx=22,
+            pady=12,
         ).pack(side="left")
 
         action_button(
@@ -253,6 +265,9 @@ class ImportacaoGuidedView(tk.Frame):
             text="Calcular Conferência & Avançar ➔",
             command=self._avancar_para_etapa_3,
             variant="primary",
+            font=FONTES["secao"],
+            padx=22,
+            pady=12,
         ).pack(side="right")
 
     def _render_etapa_3_conferencia(self):
