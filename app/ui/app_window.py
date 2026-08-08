@@ -1969,7 +1969,7 @@ class CaixaApp(tk.Tk):
         if event is not None and event.widget is not self:
             return
         compacto = self.winfo_width() < 980
-        compacto_altura = self.winfo_height() < 760
+        compacto_altura = self.winfo_height() < 700
         if compacto_altura != self._compacto_altura:
             self._compacto_altura = compacto_altura
             self._aplicar_compacto_altura(compacto_altura)
@@ -2020,16 +2020,20 @@ class CaixaApp(tk.Tk):
             self._lbl_status_fluxo.configure(font=("Segoe UI", 10, "bold"), wraplength=230)
             self._lbl_status_fluxo.pack_configure(pady=(4, 2))
             self._lbl_status_aux.configure(font=("Segoe UI", 8), wraplength=230)
-            self._card_responsavel.configure(padx=10, pady=8)
-            self._card_responsavel.pack_configure(pady=(0, 7))
-            self._entry_responsavel.pack_configure(ipady=5)
-            self._totais_card.configure(padx=10, pady=9)
-            self._totais_card.pack_configure(pady=(0, 7))
+            if hasattr(self, "_card_responsavel") and self._card_responsavel:
+                self._card_responsavel.configure(padx=10, pady=8)
+                self._card_responsavel.pack_configure(pady=(0, 7))
+            if hasattr(self, "_entry_responsavel") and self._entry_responsavel:
+                self._entry_responsavel.pack_configure(ipady=5)
+            if hasattr(self, "_totais_card") and self._totais_card:
+                self._totais_card.configure(padx=10, pady=9)
+                self._totais_card.pack_configure(pady=(0, 7))
             self._lbl_total.configure(font=("Segoe UI", 17, "bold"))
             self._lbl_forma_pgto.pack_configure(pady=(0, 3))
             self._right_action_bar.configure(padx=8, pady=7)
             self._btn_finalizar.configure(font=("Segoe UI", 10, "bold"), pady=9)
-            self._lbl_ajuda.pack_forget()
+            if hasattr(self, "_lbl_ajuda") and self._lbl_ajuda:
+                self._lbl_ajuda.pack_forget()
             for botao in self._btns_pgto.values():
                 botao.configure(font=("Segoe UI", 8, "bold"), pady=7)
                 botao.grid_configure(padx=3, pady=3)
@@ -2049,16 +2053,20 @@ class CaixaApp(tk.Tk):
             self._lbl_status_fluxo.configure(font=("Segoe UI", 13, "bold"), wraplength=230)
             self._lbl_status_fluxo.pack_configure(pady=(8, 4))
             self._lbl_status_aux.configure(font=("Segoe UI", 9), wraplength=230)
-            self._card_responsavel.configure(padx=14, pady=12)
-            self._card_responsavel.pack_configure(pady=(0, 12))
-            self._entry_responsavel.pack_configure(ipady=8)
-            self._totais_card.configure(padx=14, pady=14)
-            self._totais_card.pack_configure(pady=(0, 12))
+            if hasattr(self, "_card_responsavel") and self._card_responsavel:
+                self._card_responsavel.configure(padx=14, pady=12)
+                self._card_responsavel.pack_configure(pady=(0, 12))
+            if hasattr(self, "_entry_responsavel") and self._entry_responsavel:
+                self._entry_responsavel.pack_configure(ipady=8)
+            if hasattr(self, "_totais_card") and self._totais_card:
+                self._totais_card.configure(padx=14, pady=14)
+                self._totais_card.pack_configure(pady=(0, 12))
             self._lbl_total.configure(font=("Segoe UI", 20, "bold"))
             self._lbl_forma_pgto.pack_configure(pady=(0, 6))
             self._right_action_bar.configure(padx=10, pady=10)
             self._btn_finalizar.configure(font=("Segoe UI", 12, "bold"), pady=12)
-            self._lbl_ajuda.pack(anchor="w", pady=(10, 0))
+            if hasattr(self, "_lbl_ajuda") and self._lbl_ajuda:
+                self._lbl_ajuda.pack(anchor="w", pady=(10, 0))
             for botao in self._btns_pgto.values():
                 botao.configure(font=("Segoe UI", 10, "bold"), pady=12)
                 botao.grid_configure(padx=4, pady=4)
