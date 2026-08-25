@@ -57,6 +57,7 @@ desktop.ini
 build/
 dist/
 installer/output/
+tmp/
 *.log
 py.cmd
 .scratch/
