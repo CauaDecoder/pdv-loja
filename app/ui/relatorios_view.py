@@ -9,11 +9,11 @@ canceladas em seção isolada e as ações de exportação em Excel.
 from __future__ import annotations
 
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
-import database
-from app.services import relatorios_service
+from app.runtime import database, filtered_report, period_report, reports as relatorios_service
 from app.ui.components import (
     Card,
     DataTable,
@@ -21,30 +21,38 @@ from app.ui.components import (
     PageHeader,
     SectionHeader,
     StatusBadge,
+    StyledEntry,
     action_button,
+    bind_mousewheel_tree,
 )
-from estoque.relatorio_estoque import gerar_posicao_estoque
-from tema import FONTES, TEMA_ATUAL, moeda
+from app.estoque.relatorio_estoque import gerar_posicao_estoque
+from app.ui.theme import FONTES, TEMA_ATUAL, moeda
 
 
 class RelatoriosView(tk.Frame):
     """View principal da aba de Relatórios e Fechamento."""
 
-    def __init__(self, parent: tk.Widget, periodo_id_provider: Callable[[], int] | None = None):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        periodo_id_provider: Callable[[], int] | None = None,
+        destinos: list[dict] | None = None,
+        autoload: bool = True,
+    ):
         super().__init__(parent, bg=TEMA_ATUAL["fundo"], padx=18, pady=16)
         self._periodo_id_provider = periodo_id_provider
         self._dados_fechamento: dict[str, Any] = {}
+        self._destinos_iniciais = destinos
 
         self._build_ui()
-        self.atualizar()
+        if autoload:
+            self.atualizar()
 
     def _obter_periodo_id(self) -> int:
         if self._periodo_id_provider:
             return self._periodo_id_provider()
         # Fallback para o ultimo periodo aberto ou 1
-        with database.get_conn() as conn:
-            row = conn.execute("SELECT id FROM periodos_caixa ORDER BY id DESC LIMIT 1").fetchone()
-            return row["id"] if row else 1
+        return database.ultimo_periodo_id()
 
     def _build_ui(self):
         """Monta a estrutura visual da aba."""
@@ -61,6 +69,7 @@ class RelatoriosView(tk.Frame):
 
         # Scrollable container para caber bem em telas 1366x768 e menores
         canvas = tk.Canvas(self, bg=TEMA_ATUAL["fundo"], highlightthickness=0)
+        self._canvas = canvas
         scroll = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scroll.set)
 
@@ -83,6 +92,7 @@ class RelatoriosView(tk.Frame):
 
         # --- SEÇÃO 3: Relatórios Operacionais & Exportação ---
         self._build_card_exportacoes()
+        bind_mousewheel_tree(self._content, canvas)
 
     def _build_card_fechamento_financeiro(self):
         self._card_financeiro = Card(self._content, padding=16)
@@ -148,42 +158,78 @@ class RelatoriosView(tk.Frame):
             "Gere arquivos da conciliação do período ou posição atual do estoque.",
         ).pack(anchor="w", fill="x", pady=(0, 10))
 
+        filtros = tk.Frame(card_exp, bg=TEMA_ATUAL["surface"])
+        filtros.pack(fill="x", pady=(0, 10))
+        self._var_data_inicial = tk.StringVar()
+        self._var_data_final = tk.StringVar()
+        self._var_forma = tk.StringVar(value="Todas")
+        destinos = self._destinos_iniciais if self._destinos_iniciais is not None else database.listar_destinos_financeiros()
+        self._destinos_relatorio = {destino["nome"]: int(destino["id"]) for destino in destinos}
+        self._var_destino = tk.StringVar(value="Todos")
+        self._var_status_relatorio = tk.StringVar(value="Válidas e corrigidas")
+        campos = []
+        for rotulo, fabrica in (
+            ("De (AAAA-MM-DD)", lambda parent: StyledEntry(parent, textvariable=self._var_data_inicial, bg=TEMA_ATUAL["surface_2"])),
+            ("Até", lambda parent: StyledEntry(parent, textvariable=self._var_data_final, bg=TEMA_ATUAL["surface_2"])),
+            ("Forma", lambda parent: ttk.Combobox(parent, textvariable=self._var_forma, values=("Todas", "Dinheiro", "Pix", "Debito", "Credito", "Cartao"), state="readonly")),
+            ("Destino", lambda parent: ttk.Combobox(parent, textvariable=self._var_destino, values=("Todos", *self._destinos_relatorio), state="readonly")),
+            ("Status", lambda parent: ttk.Combobox(parent, textvariable=self._var_status_relatorio, values=("Válidas e corrigidas", "Canceladas", "Todas"), state="readonly")),
+        ):
+            bloco = tk.Frame(filtros, bg=TEMA_ATUAL["surface"])
+            tk.Label(bloco, text=rotulo, bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["text_muted"]).pack(anchor="w")
+            fabrica(bloco).pack(fill="x", ipady=3, pady=(3, 0))
+            campos.append(bloco)
+
         row_btns = tk.Frame(card_exp, bg=TEMA_ATUAL["surface"])
         row_btns.pack(fill="x")
-
-        action_button(
+        botoes = [action_button(
             row_btns,
             text="📊 Exportar Relatório do Período (.xlsx)",
             command=self._exportar_fechamento_xlsx,
             variant="primary",
-        ).pack(side="left", padx=(0, 10))
-
-        action_button(
+        ), action_button(
             row_btns,
             text="📦 Exportar Posição do Estoque (.xlsx)",
             command=self._exportar_estoque_xlsx,
             variant="secondary",
-        ).pack(side="left")
+        ), action_button(
+            row_btns,
+            text="Exportar vendas filtradas (.xlsx)",
+            command=self._exportar_vendas_filtradas,
+            variant="secondary",
+        )]
+
+        def ajustar_grade(event):
+            colunas = 1 if event.width < 480 else (2 if event.width < 900 else 5)
+            for coluna in range(5):
+                filtros.columnconfigure(coluna, weight=1 if coluna < colunas else 0)
+            for indice, bloco in enumerate(campos):
+                bloco.grid(row=indice // colunas, column=indice % colunas, sticky="ew", padx=(0 if indice % colunas == 0 else 8, 0), pady=(0, 8))
+
+            colunas_botoes = 1 if event.width < 620 else 3
+            for coluna in range(3):
+                row_btns.columnconfigure(coluna, weight=1 if coluna < colunas_botoes else 0)
+            for indice, botao in enumerate(botoes):
+                botao.grid(row=indice // colunas_botoes, column=indice % colunas_botoes, sticky="ew", padx=(0 if indice % colunas_botoes == 0 else 8, 0), pady=(0, 8))
+
+        card_exp.bind("<Configure>", ajustar_grade)
 
         self._lbl_feedback_exp = tk.Label(card_exp, text="", bg=TEMA_ATUAL["surface"], fg=TEMA_ATUAL["primary"], font=FONTES["corpo_bold"])
         self._lbl_feedback_exp.pack(anchor="w", pady=(8, 0))
 
-    def atualizar(self):
+    def atualizar(self, dados: dict | None = None):
         """Carrega os dados atualizados do servico de relatorios."""
         periodo_id = self._obter_periodo_id()
-        try:
-            dados = relatorios_service.obter_fechamento_financeiro(periodo_id)
-        except Exception:
-            dados = {
-                "period_id": periodo_id,
-                "financial_movement": {
-                    "transactions": 0,
-                    "total": 0.0,
-                    "corrected_transactions": 0,
-                    "payment_summary": {},
-                },
-                "cancelled_sales": [],
-            }
+        if dados is None:
+            try:
+                dados = relatorios_service.obter_fechamento_financeiro(periodo_id)
+            except Exception as erro:
+                messagebox.showerror(
+                    "Não foi possível carregar o fechamento",
+                    str(erro),
+                    parent=self,
+                )
+                return
 
         self._dados_fechamento = dados
         mov = dados.get("financial_movement", {})
@@ -248,7 +294,7 @@ class RelatoriosView(tk.Frame):
         if not pasta:
             return
         try:
-            caminho = relatorios_service.gerar_relatorio_periodo(periodo_id, pasta_saida=pasta)
+            caminho = period_report(periodo_id, Path(pasta) / f"Relatorio_periodo-{periodo_id}.xlsx")
             self._lbl_feedback_exp.config(text=f"✓ Relatório salvo com sucesso em:\n{caminho}")
             messagebox.showinfo("Exportação Concluída", f"Relatório do período exportado com sucesso para:\n\n{caminho}", parent=self)
         except Exception as erro:
@@ -260,8 +306,31 @@ class RelatoriosView(tk.Frame):
         if not pasta:
             return
         try:
-            caminho = gerar_posicao_estoque(pasta_saida=pasta)
+            caminho = gerar_posicao_estoque(database.indicadores_produtos_estoque(), pasta)
             self._lbl_feedback_exp.config(text=f"✓ Posição do estoque salva em:\n{caminho}")
             messagebox.showinfo("Exportação Concluída", f"Posição do estoque exportada com sucesso para:\n\n{caminho}", parent=self)
         except Exception as erro:
             messagebox.showerror("Erro na Exportação", str(erro), parent=self)
+
+    def _exportar_vendas_filtradas(self):
+        data_inicial = self._var_data_inicial.get().strip()
+        data_final = self._var_data_final.get().strip()
+        if not data_inicial or not data_final:
+            messagebox.showerror("Filtro incompleto", "Informe as datas inicial e final.", parent=self)
+            return
+        pasta = filedialog.askdirectory(title="Selecione a pasta para salvar o relatório")
+        if not pasta:
+            return
+        forma = self._var_forma.get()
+        try:
+            caminho = filtered_report(
+                {"data_inicial": data_inicial, "data_final": data_final,
+                 "forma": None if forma == "Todas" else forma,
+                 "destino_id": self._destinos_relatorio.get(self._var_destino.get()),
+                 "status": {"Canceladas": "cancelled", "Todas": "all"}.get(self._var_status_relatorio.get(), "valid")},
+                Path(pasta) / "relatorio_vendas_filtrado.xlsx",
+            )
+            self._lbl_feedback_exp.config(text=f"✓ Relatório filtrado salvo em:\n{caminho}")
+            messagebox.showinfo("Exportação concluída", f"Relatório salvo em:\n\n{caminho}", parent=self)
+        except Exception as erro:
+            messagebox.showerror("Erro na exportação", str(erro), parent=self)

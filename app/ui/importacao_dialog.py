@@ -5,10 +5,10 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-import tema as theme
+from app.ui import theme
 from app.services.importacao_service import MODOS
 from app.ui.components import Card, PageHeader, bind_escape_to_close, configure_styles
-from tema import moeda
+from app.ui.theme import moeda
 
 
 def _valor(valor) -> str:

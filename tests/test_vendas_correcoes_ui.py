@@ -10,6 +10,7 @@ from app.ui.vendas_correcoes_view import (
     VendaDetailModal,
     ler_quantidade,
     ler_valor_monetario_opcional,
+    montar_parcelas_mistas_corrigidas,
 )
 
 
@@ -79,6 +80,55 @@ def test_valor_monetario_rejeita_valores_nao_finitos():
     for valor in ("NaN", "Infinity", "-Infinity"):
         with unittest.TestCase().assertRaisesRegex(ValueError, "valor monetario valido"):
             ler_valor_monetario_opcional(valor, "Valor recebido")
+
+
+def test_editor_misto_monta_parcelas_em_centavos_e_calcula_troco():
+    parcelas = montar_parcelas_mistas_corrigidas(
+        [
+            {
+                "method": "Pix",
+                "destination_id": 2,
+                "detail": "",
+            },
+            {
+                "method": "Dinheiro",
+                "destination_id": 1,
+                "detail": "",
+            },
+        ],
+        ["6,00", "4,00"],
+        ["", "5,00"],
+        1000,
+    )
+    assert parcelas == [
+        {
+            "forma": "Pix",
+            "destino_id": 2,
+            "valor_centavos": 600,
+            "detalhe": "",
+            "valor_recebido_centavos": None,
+            "troco_centavos": None,
+        },
+        {
+            "forma": "Dinheiro",
+            "destino_id": 1,
+            "valor_centavos": 400,
+            "detalhe": "",
+            "valor_recebido_centavos": 500,
+            "troco_centavos": 100,
+        },
+    ]
+
+
+def test_correcao_notifica_tela_principal_para_atualizar_kpis():
+    view = VendasCorrecoesView.__new__(VendasCorrecoesView)
+    view.atualizar = Mock()
+    view._on_sale_updated = Mock()
+
+    view._apos_venda_atualizada()
+
+    view.atualizar.assert_called_once_with()
+    view._on_sale_updated.assert_called_once_with()
 
 
 def test_sucesso_da_correcao_atualiza_detalhe_e_lista():
@@ -166,7 +216,7 @@ class VendasCorrecoesUITest(unittest.TestCase):
 
     def setUp(self):
         self._listar_patch = patch(
-            "app.ui.vendas_correcoes_view.vendas_service.listar_vendas_correcoes",
+            "app.ui.vendas_correcoes_view.vendas_service.consultar_vendas_correcoes",
             return_value=[],
         )
         self._listar_vendas = self._listar_patch.start()
@@ -185,9 +235,53 @@ class VendasCorrecoesUITest(unittest.TestCase):
 
         try:
             view = VendasCorrecoesView(root)
-            self.assertIsNotNone(view._tree)
+            self.assertIsNotNone(view._tree_vendas)
             # Banco vazio deve permanecer vazio: a integracao nao usa mocks.
             self.assertEqual(view._vendas_carregadas, [])
+            self.assertEqual(view._tree_vendas.get_children(), ())
+            self.assertEqual(view._var_estado_lista.get(), "Nenhuma Venda encontrada | Total: R$ 0,00")
+        finally:
+            root.destroy()
+
+    def test_vendas_carregadas_aparecem_no_topo_da_grade(self):
+        self._listar_vendas.return_value = [
+            {
+                "sale_number": 1,
+                "period_id": 1,
+                "sold_at": {"date": "22/08/2026", "time": "12:09"},
+                "responsible": "Ana",
+                "payment_summary": "Pix",
+                "status": "valid",
+                "item_summary": {"label": "1 item, 1 unidade"},
+            },
+            {
+                "sale_number": 2,
+                "period_id": 1,
+                "sold_at": {"date": "22/08/2026", "time": "12:10"},
+                "responsible": "Ana",
+                "payment_summary": "Dinheiro",
+                "status": "valid",
+                "item_summary": {"label": "1 item, 1 unidade"},
+            },
+        ]
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            view = VendasCorrecoesView(root)
+            root.update_idletasks()
+            linhas = view._tree_vendas.get_children()
+            self.assertEqual(len(linhas), 2)
+            valores = [view._tree_vendas.item(linha, "values") for linha in linhas]
+            self.assertEqual([valor[0] for valor in valores], ["#001", "#002"])
+            self.assertEqual(
+                view._var_estado_lista.get(),
+                "Vendas válidas: 2 | Total do período: R$ 0,00 | Canceladas fora do total: 0",
+            )
         finally:
             root.destroy()
 
@@ -321,8 +415,7 @@ class VendasCorrecoesUITest(unittest.TestCase):
                 alterar_pagamento.assert_called_once()
                 sub_pagamento.destroy()
 
-                modal._tree_items.selection_set("1")
-                modal._alterar_quantidade()
+                modal._alterar_quantidade(1)
                 sub_quantidade = next(
                     filho for filho in modal.winfo_children() if isinstance(filho, tk.Toplevel)
                 )
@@ -336,8 +429,7 @@ class VendasCorrecoesUITest(unittest.TestCase):
                 alterar_quantidade.assert_called_once()
                 sub_quantidade.destroy()
 
-                modal._tree_items.selection_set("1")
-                modal._remover_item()
+                modal._remover_item(1)
                 remover_item.assert_called_once_with(
                     periodo_id=2,
                     num_venda=10,

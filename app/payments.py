@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tema import moeda
+from app.formatting import moeda
 
 
 CARD_BRANDS = ("Visa", "Mastercard", "Elo", "American Express", "Hipercard")

@@ -5,8 +5,8 @@ import tkinter as tk
 import tempfile
 from pathlib import Path
 
-import database
-import tema
+from app import database
+from app.ui import theme as tema
 from app.ui import components
 from app.ui.app_window import CaixaApp
 
@@ -77,8 +77,8 @@ class ConfiguracoesUITest(unittest.TestCase):
             with database.get_conn() as conn:
                 conn.execute(
                     """
-                    INSERT INTO produtos (codigo, nome, preco, estoque)
-                    VALUES ('TEMA', 'Produto Tema', 10, 5)
+                    INSERT INTO produtos (codigo, nome, preco_centavos, estoque)
+                    VALUES ('TEMA', 'Produto Tema', 1000, 5)
                     """
                 )
             fundos_claros = {
@@ -118,8 +118,8 @@ class ConfiguracoesUITest(unittest.TestCase):
         finally:
             root.destroy()
 
-    def test_botoes_de_selecao_permanecem_legiveis_no_tema_escuro(self):
-        """Radio e check buttons não podem conservar seleção branca no tema escuro."""
+    def test_controles_de_selecao_permanecem_legiveis_no_tema_escuro(self):
+        """Controles de seleção usam texto e estado legíveis no tema escuro."""
         try:
             root = CaixaApp()
             root.withdraw()
@@ -134,13 +134,19 @@ class ConfiguracoesUITest(unittest.TestCase):
             while pendentes:
                 widget = pendentes.pop()
                 pendentes.extend(widget.winfo_children())
-                if isinstance(widget, (tk.Radiobutton, tk.Checkbutton)):
+                if isinstance(widget, (tk.Radiobutton, tk.Checkbutton, components.ToggleSwitch)):
                     seletores.append(widget)
 
             self.assertTrue(seletores)
             for seletor in seletores:
-                self.assertNotEqual(seletor.cget("selectcolor").lower(), "#ffffff")
-                self.assertEqual(seletor.cget("foreground"), tema.TEMA_ESCURO["text"])
+                if isinstance(seletor, components.ToggleSwitch):
+                    self.assertEqual(
+                        seletor.itemcget(seletor._label_item, "fill"),
+                        tema.TEMA_ESCURO["text"],
+                    )
+                else:
+                    self.assertNotEqual(seletor.cget("selectcolor").lower(), "#ffffff")
+                    self.assertEqual(seletor.cget("foreground"), tema.TEMA_ESCURO["text"])
         finally:
             root.destroy()
             tema.definir_tema_atual("claro")

@@ -1,12 +1,13 @@
-"""Componentes visuais reutilizaveis da interface Tkinter (Variante A - Command Center)."""
+"""Componentes visuais reutilizáveis da interface Tkinter (Variant B)."""
 
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Callable, Sequence
 
-from tema import (
+from app.ui.theme import (
     CARD_PADDING,
     FONTES,
     obter_nome_tema_atual,
@@ -49,6 +50,27 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
         padding=[("selected", (16, 10)), ("active", (16, 10))],
     )
 
+    style.layout("Inner.TNotebook", style.layout("TNotebook"))
+    style.configure(
+        "Inner.TNotebook",
+        background=tema["bg"],
+        borderwidth=0,
+        tabmargins=(0, 0, 0, 0),
+    )
+    style.configure(
+        "Inner.TNotebook.Tab",
+        font=FONTES["botao"],
+        padding=(12, 6),
+        background=tema["surface_2"],
+        foreground=tema["text_muted"],
+        borderwidth=0,
+    )
+    style.map(
+        "Inner.TNotebook.Tab",
+        background=[("selected", tema["surface"]), ("active", tema["surface_hover"])],
+        foreground=[("selected", tema["primary"]), ("active", tema["text"])],
+    )
+
     style.configure(
         "Treeview",
         background=tema["surface"],
@@ -84,25 +106,43 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
         "TCombobox",
         padding=6,
         arrowsize=12,
-        fieldbackground=tema["surface_3"],
+        fieldbackground=tema["surface"],
         background=tema["surface_2"],
-        bordercolor=tema["border"],
+        bordercolor=tema["border_soft"],
         lightcolor=tema["border_soft"],
         darkcolor=tema["border_soft"],
         foreground=tema["text"],
     )
     style.map(
         "TCombobox",
-        fieldbackground=[("readonly", tema["surface_3"]), ("disabled", tema["surface_2"])],
+        fieldbackground=[("readonly", tema["surface"]), ("disabled", tema["surface_2"])],
         background=[("readonly", tema["surface_2"]), ("active", tema["surface_hover"])],
         foreground=[("readonly", tema["text"]), ("disabled", tema["text_muted"])],
         selectbackground=[("readonly", tema["primary_soft"])],
         selectforeground=[("readonly", tema["text"])],
     )
-    root.option_add("*TCombobox*Listbox.background", tema["surface_3"])
+    root.option_add("*TCombobox*Listbox.background", tema["surface"])
     root.option_add("*TCombobox*Listbox.foreground", tema["text"])
     root.option_add("*TCombobox*Listbox.selectBackground", tema["primary_soft"])
     root.option_add("*TCombobox*Listbox.selectForeground", tema["text"])
+
+    style.configure(
+        "TEntry",
+        padding=7,
+        fieldbackground=tema["surface_2"],
+        background=tema["surface_2"],
+        foreground=tema["text"],
+        insertcolor=tema["text"],
+        bordercolor=tema["border_soft"],
+        lightcolor=tema["border_soft"],
+        darkcolor=tema["border_soft"],
+    )
+    style.map(
+        "TEntry",
+        fieldbackground=[("disabled", tema["surface_3"]), ("focus", tema["surface_2"])],
+        foreground=[("disabled", tema["text_muted"])],
+        bordercolor=[("focus", tema["focus_ring"])],
+    )
 
     style.configure(
         "TScrollbar",
@@ -118,6 +158,26 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
 def bind_escape_to_close(dialog: tk.Toplevel) -> None:
     """Padroniza o cancelamento por Escape em modais Tkinter."""
     dialog.bind("<Escape>", lambda _event: dialog.destroy())
+
+
+def bind_mousewheel_tree(widget: tk.Misc, scrollable: tk.Misc) -> None:
+    """Encaminha a roda usada sobre qualquer filho para a área rolável."""
+    def scroll(event):
+        delta = getattr(event, "delta", 0)
+        if delta:
+            units = -1 if delta > 0 else 1
+        else:
+            units = -1 if getattr(event, "num", 0) == 4 else 1
+        scrollable.yview_scroll(units, "units")
+        return "break"
+
+    pending = [widget]
+    while pending:
+        current = pending.pop()
+        current.bind("<MouseWheel>", scroll)
+        current.bind("<Button-4>", scroll)
+        current.bind("<Button-5>", scroll)
+        pending.extend(current.winfo_children())
 
 
 _BACKGROUND_COLOR_KEYS = (
@@ -262,7 +322,7 @@ def apply_theme_to_widget_tree(
 
 
 class FocusHelper:
-    """Helper para aplicar anel de foco evidente via teclado (Variante A - Dourado)."""
+    """Aplique anel de foco dourado e evidente via teclado."""
 
     @staticmethod
     def attach(
@@ -399,7 +459,7 @@ class StyledEntry(tk.Entry):
 
     def __init__(self, parent: tk.Widget, font=None, **kwargs):
         tema = obter_tema_atual()
-        bg = kwargs.pop("bg", tema["surface_3"])
+        bg = kwargs.pop("bg", tema["surface"])
         fg = kwargs.pop("fg", tema["text"])
         font = font or FONTES["corpo"]
 
@@ -413,7 +473,202 @@ class StyledEntry(tk.Entry):
             insertbackground=fg,
             **kwargs,
         )
-        FocusHelper.attach(self, normal_border=tema["border"])
+        FocusHelper.attach(self, normal_border=tema["border_soft"])
+
+
+class ToggleSwitch(tk.Canvas):
+    """Alternador booleano acessível e integrado ao tema visual."""
+
+    TRACK_LEFT = 2
+    TRACK_TOP = 2
+    TRACK_WIDTH = 40
+    TRACK_HEIGHT = 22
+    THUMB_RADIUS = 8
+    THUMB_OFF_X = 13
+    THUMB_ON_X = 31
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        *,
+        variable: tk.BooleanVar | None = None,
+        command: Callable | None = None,
+        text: str = "",
+        state: str = "normal",
+        **kwargs,
+    ):
+        tema = obter_tema_atual()
+        label_width = tkfont.Font(font=FONTES["corpo"]).measure(text) if text else 0
+        width = kwargs.pop("width", self.TRACK_WIDTH + 12 + label_width)
+        height = kwargs.pop("height", 26)
+        kwargs.setdefault("bg", tema["surface"])
+        kwargs.setdefault("highlightthickness", 0)
+        kwargs.setdefault("takefocus", 1)
+        kwargs.setdefault("cursor", "hand2" if state == "normal" else "arrow")
+        super().__init__(parent, width=width, height=height, state=state, bd=0, **kwargs)
+
+        self.variable = variable or tk.BooleanVar(master=self, value=False)
+        self.command = command
+        self.text = text
+        self._animation_id: str | None = None
+        self._focused = False
+        self._thumb_center = self.THUMB_ON_X if self.variable.get() else self.THUMB_OFF_X
+
+        self._focus_item = self.create_rectangle(
+            0,
+            0,
+            self.TRACK_WIDTH + 4,
+            self.TRACK_HEIGHT + 4,
+            outline="",
+            width=2,
+        )
+        self._track_item = self.create_polygon(
+            self._rounded_points(
+                self.TRACK_LEFT,
+                self.TRACK_TOP,
+                self.TRACK_LEFT + self.TRACK_WIDTH,
+                self.TRACK_TOP + self.TRACK_HEIGHT,
+                self.TRACK_HEIGHT // 2,
+            ),
+            smooth=True,
+            splinesteps=24,
+            outline="",
+        )
+        self._thumb_item = self.create_oval(0, 0, 0, 0, outline="")
+        self._label_item = self.create_text(
+            self.TRACK_WIDTH + 10,
+            self.TRACK_TOP + self.TRACK_HEIGHT / 2,
+            text=text,
+            anchor="w",
+            font=FONTES["corpo"],
+        )
+
+        self._trace_id = self.variable.trace_add("write", self._sync_from_variable)
+        self.bind("<Button-1>", self._toggle_from_event)
+        self.bind("<space>", self._toggle_from_event)
+        self.bind("<Return>", self._toggle_from_event)
+        self.bind("<FocusIn>", self._on_focus_in)
+        self.bind("<FocusOut>", self._on_focus_out)
+        self.bind("<Destroy>", self._on_destroy)
+        self._refresh_visual()
+
+    @staticmethod
+    def _rounded_points(left: int, top: int, right: int, bottom: int, radius: int) -> tuple[int, ...]:
+        return (
+            left + radius,
+            top,
+            right - radius,
+            top,
+            right,
+            top,
+            right,
+            top + radius,
+            right,
+            bottom - radius,
+            right,
+            bottom,
+            right - radius,
+            bottom,
+            left + radius,
+            bottom,
+            left,
+            bottom,
+            left,
+            bottom - radius,
+            left,
+            top + radius,
+            left,
+            top,
+        )
+
+    def get(self) -> bool:
+        """Retorna o estado booleano atual."""
+        return bool(self.variable.get())
+
+    def set(self, value: bool) -> None:
+        """Define o estado sem disparar o callback de interação."""
+        self.variable.set(bool(value))
+
+    def configure(self, cnf=None, **kwargs):
+        state_changed = "state" in kwargs or isinstance(cnf, dict) and "state" in cnf
+        state = kwargs.get("state", cnf.get("state") if isinstance(cnf, dict) else None)
+        result = super().configure(cnf, **kwargs)
+        if state_changed and hasattr(self, "_track_item"):
+            super().configure(cursor="hand2" if state == "normal" else "arrow")
+            self._refresh_visual()
+        return result
+
+    config = configure
+
+    def _toggle_from_event(self, _event=None):
+        if str(self.cget("state")) == "disabled":
+            return "break"
+        self.variable.set(not self.get())
+        if self.command:
+            self.command()
+        return "break"
+
+    def _sync_from_variable(self, *_args) -> None:
+        self._animate_thumb(self.THUMB_ON_X if self.get() else self.THUMB_OFF_X)
+        self._refresh_visual()
+
+    def _animate_thumb(self, target: int) -> None:
+        if self._animation_id:
+            self.after_cancel(self._animation_id)
+            self._animation_id = None
+        delta = target - self._thumb_center
+        if abs(delta) <= 1:
+            self._animation_id = None
+            self._thumb_center = target
+            self._position_thumb()
+            return
+        self._thumb_center += 3 if delta > 0 else -3
+        self._position_thumb()
+        self._animation_id = self.after(12, lambda: self._animate_thumb(target))
+
+    def _position_thumb(self) -> None:
+        center_y = self.TRACK_TOP + self.TRACK_HEIGHT / 2
+        radius = self.THUMB_RADIUS
+        self.coords(
+            self._thumb_item,
+            self._thumb_center - radius,
+            center_y - radius,
+            self._thumb_center + radius,
+            center_y + radius,
+        )
+
+    def _refresh_visual(self) -> None:
+        tema = obter_tema_atual()
+        disabled = str(self.cget("state")) == "disabled"
+        track = tema["surface_2"] if disabled else (tema["primary"] if self.get() else tema["border"])
+        thumb = tema["text_muted"] if disabled else tema["surface"]
+        text = tema["text_muted"] if disabled else tema["text"]
+        self.itemconfigure(self._track_item, fill=track)
+        self.itemconfigure(self._thumb_item, fill=thumb)
+        self.itemconfigure(self._label_item, fill=text)
+        self.itemconfigure(self._focus_item, outline=tema["focus_ring"] if self._focused else "")
+        self._position_thumb()
+
+    def _on_focus_in(self, _event) -> None:
+        self._focused = True
+        self._refresh_visual()
+
+    def _on_focus_out(self, _event) -> None:
+        self._focused = False
+        self._refresh_visual()
+
+    def _on_destroy(self, event) -> None:
+        if event.widget is not self:
+            return
+        if self._animation_id:
+            try:
+                self.after_cancel(self._animation_id)
+            except tk.TclError:
+                pass
+        try:
+            self.variable.trace_remove("write", self._trace_id)
+        except tk.TclError:
+            pass
 
 
 class LabeledField(tk.Frame):
@@ -533,8 +788,9 @@ class StatusBadge(tk.Label):
             "VALIDA": (tema["primary"], tema["primary_soft"]),
         }
         default_fg, default_bg = badge_map.get(text, (tema["text"], tema["surface_2"]))
-        final_fg = fg or default_fg
-        final_bg = bg or default_bg
+        variant_fg, variant_bg = badge_map.get(bg, (None, None))
+        final_fg = fg or variant_fg or default_fg
+        final_bg = variant_bg or bg or default_bg
         super().__init__(parent, text=text, bg=final_bg, fg=final_fg, font=FONTES["label_sm"], padx=8, pady=3)
 
 
@@ -590,28 +846,32 @@ class SectionHeader(tk.Frame):
         subtitle: str = "",
         action_text: str | None = None,
         action: Callable | None = None,
+        bg: str | None = None,
     ):
         tema = obter_tema_atual()
-        super().__init__(parent, bg=tema["bg"])
+        background = bg or tema["bg"]
+        super().__init__(parent, bg=background)
+        self.action_button: tk.Button | None = None
 
-        left = tk.Frame(self, bg=tema["bg"])
+        left = tk.Frame(self, bg=background)
         left.pack(side="left", fill="x", expand=True)
 
-        tk.Label(left, text=title, bg=tema["bg"], fg=tema["text"], font=FONTES["secao"]).pack(anchor="w")
+        tk.Label(left, text=title, bg=background, fg=tema["text"], font=FONTES["secao"]).pack(anchor="w")
         if subtitle:
-            tk.Label(left, text=subtitle, bg=tema["bg"], fg=tema["text_muted"], font=FONTES["corpo"]).pack(
+            tk.Label(left, text=subtitle, bg=background, fg=tema["text_muted"], font=FONTES["corpo"]).pack(
                 anchor="w", pady=(1, 0)
             )
 
         if action_text:
-            action_button(
+            self.action_button = action_button(
                 self,
                 text=action_text,
                 command=action,
                 variant="secondary",
                 padx=10,
                 pady=5,
-            ).pack(side="right")
+            )
+            self.action_button.pack(side="right")
 
 
 class SearchInput(tk.Frame):
@@ -627,18 +887,18 @@ class SearchInput(tk.Frame):
         on_arrow_up: Callable | None = None,
     ):
         tema = obter_tema_atual()
-        super().__init__(parent, bg=tema["surface_3"], highlightthickness=1, highlightbackground=tema["border"])
+        super().__init__(parent, bg=tema["surface"], highlightthickness=1, highlightbackground=tema["border_soft"])
 
-        FocusHelper.attach(self, normal_border=tema["border"])
+        FocusHelper.attach(self, normal_border=tema["border_soft"])
 
-        tk.Label(self, text="⌕", bg=tema["surface_3"], fg=tema["text_muted"], font=("Segoe UI Symbol", 13, "bold")).pack(
+        tk.Label(self, text="⌕", bg=tema["surface"], fg=tema["text_muted"], font=("Segoe UI Symbol", 13, "bold")).pack(
             side="left", padx=(12, 6)
         )
 
         self.entry = tk.Entry(
             self,
             textvariable=textvariable,
-            bg=tema["surface_3"],
+            bg=tema["surface"],
             fg=tema["text"],
             relief="flat",
             bd=0,
@@ -676,12 +936,17 @@ class SearchInput(tk.Frame):
     def _on_focus_out(self):
         tema = obter_tema_atual()
         try:
-            self.config(highlightbackground=tema["border"])
+            self.config(highlightbackground=tema["border_soft"])
         except tk.TclError:
             pass
         if self.placeholder and not self.entry.get():
             self.entry.insert(0, self.placeholder)
             self.entry.config(fg=tema["text_muted"])
+
+    def value(self) -> str:
+        """Retorna somente texto digitado, sem expor o placeholder visual."""
+        current = self.entry.get()
+        return "" if self.placeholder and current == self.placeholder else current
 
 
 class DataTable(ttk.Treeview):
@@ -764,13 +1029,13 @@ class BaseModal(tk.Toplevel):
         height: int = 420,
     ):
         super().__init__(parent)
+        self.withdraw()
         self.parent = parent
         tema = obter_tema_atual()
 
         self.title(title)
         self.configure(bg=tema["bg"])
         self.transient(parent)
-        self.grab_set()
 
         # Centralizar na janela principal
         parent.update_idletasks()
@@ -779,10 +1044,12 @@ class BaseModal(tk.Toplevel):
         p_w = parent.winfo_width()
         p_h = parent.winfo_height()
 
-        x = p_x + max(0, (p_w - width) // 2)
-        y = p_y + max(0, (p_h - height) // 2)
+        width = min(width, max(360, self.winfo_screenwidth() - 48))
+        height = min(height, max(320, self.winfo_screenheight() - 80))
+        x = max(12, p_x + max(0, (p_w - width) // 2))
+        y = max(12, p_y + max(0, (p_h - height) // 2))
         self.geometry(f"{width}x{height}+{x}+{y}")
-        self.minsize(width, height)
+        self.minsize(min(420, width), min(320, height))
 
         # Header do modal
         self.header_frame = tk.Frame(self, bg=tema["surface"], padx=18, pady=14)
@@ -810,6 +1077,16 @@ class BaseModal(tk.Toplevel):
         self.footer_frame.pack(fill="x")
 
         self.bind("<Escape>", lambda _e: self.close())
+        self.after_idle(self.show)
+
+    def show(self):
+        """Exibe o modal já montado e assume foco somente nesse momento."""
+        if not self.winfo_exists():
+            return
+        self.update_idletasks()
+        self.deiconify()
+        self.lift()
+        self.grab_set()
 
     def close(self):
         try:
