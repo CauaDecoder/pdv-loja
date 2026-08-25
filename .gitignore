@@ -1,14 +1,38 @@
+# Segredos e configuracao local
 .env
 .env.*
 !.env.example
-data/*.db
-data/*.db-*
-data/*.db-shm
-data/*.db-wal
-data/*.sqlite
-data/*.sqlite3
+*.pem
+*.key
+*.crt
+caixa/
+setup-output/
+
+# Dados operacionais
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+data/central/
+data/terminal-config.json
 data/imports/*
 !data/imports/.gitkeep
+backups/
+relatorios/
+*.xlsx
+
+# Documentacao e contexto internos
+docs/
+references/
+app/ui/prototype_venda/
+AGENTS.md
+CONTEXT.md
+CONTEXT-MAP.md
+*handoff*.md
+.agents/
+.codex/
+
+# Python e testes
 __pycache__/
 *.py[cod]
 *.pyo
@@ -28,14 +52,11 @@ node_modules/
 .idea/
 Thumbs.db
 desktop.ini
-relatorios/*.xlsx
-backups/
+
+# Builds e artefatos
+build/
+dist/
+installer/output/
 *.log
-*.xlsx
 py.cmd
 .scratch/
-docs/specs/
-docs/prototypes/
-docs/validation/
-docs/ux-redesign-direction.md
-handoff-design-frontend-pdv.md
