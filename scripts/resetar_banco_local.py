@@ -126,6 +126,8 @@ def resetar_banco(db_path: Path, backups_dir: Path) -> dict:
                 conn.close()
             os.replace(staging, db_path)
             substituido = True
+            for sufixo in ("-wal", "-shm"):
+                Path(f"{db_path}{sufixo}").unlink(missing_ok=True)
             conn = _conectar_somente_leitura(db_path)
             try:
                 validar_contrato_banco(conn)
@@ -136,6 +138,8 @@ def resetar_banco(db_path: Path, backups_dir: Path) -> dict:
             if substituido:
                 _criar_snapshot(backup, rollback_staging)
                 os.replace(rollback_staging, db_path)
+                for sufixo in ("-wal", "-shm"):
+                    Path(f"{db_path}{sufixo}").unlink(missing_ok=True)
             raise
         finally:
             database.DB_PATH = original

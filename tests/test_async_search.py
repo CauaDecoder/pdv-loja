@@ -1,9 +1,6 @@
 import inspect
-import os
 import threading
 import time
-
-os.environ["CAIXA_TERMINAL_CONFIG"] = "tests/nonexistent-terminal-config.json"
 
 from app.ui.app_window import CaixaApp
 

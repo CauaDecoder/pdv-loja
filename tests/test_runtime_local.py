@@ -11,14 +11,13 @@ def test_runtime_local_ignora_configuracao_central_invalida(tmp_path, monkeypatc
     config = tmp_path / "terminal-config.json"
     config.write_text("{", encoding="utf-8")
     monkeypatch.setenv("CAIXA_TERMINAL_CONFIG", str(config))
-    original = database.DB_PATH
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "original.db")
 
     runtime = Runtime.local(tmp_path / "local.db")
 
     assert runtime.client is None
     assert runtime.database is database
     assert not (tmp_path / "local.db").exists()
-    database.DB_PATH = original
 
 
 def test_runtime_central_so_e_criado_explicitamente(tmp_path):

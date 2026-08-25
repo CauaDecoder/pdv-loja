@@ -86,6 +86,7 @@ def test_reset_reverte_banco_anterior_se_validacao_pos_troca_falhar(
     _criar_legado_vazio(banco)
     replace_real = reset_module.os.replace
     corrompeu = False
+    sidecars = [Path(f"{banco}{sufixo}") for sufixo in ("-wal", "-shm")]
 
     def substituir_e_corromper(origem, destino):
         nonlocal corrompeu
@@ -93,6 +94,8 @@ def test_reset_reverte_banco_anterior_se_validacao_pos_troca_falhar(
         if not corrompeu and Path(destino) == banco:
             corrompeu = True
             Path(destino).write_bytes(b"nao e sqlite")
+            for sidecar in sidecars:
+                sidecar.touch()
 
     monkeypatch.setattr(reset_module.os, "replace", substituir_e_corromper)
 
@@ -102,3 +105,4 @@ def test_reset_reverte_banco_anterior_se_validacao_pos_troca_falhar(
     with sqlite3.connect(banco) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM produtos").fetchone()[0] == 0
+    assert all(not sidecar.exists() for sidecar in sidecars)
