@@ -1,4 +1,4 @@
-"""Componentes visuais reutilizaveis da interface Tkinter (Variante A - Command Center)."""
+"""Componentes visuais reutilizáveis da interface Tkinter (Variant B)."""
 
 from __future__ import annotations
 
@@ -127,6 +127,24 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
     root.option_add("*TCombobox*Listbox.selectForeground", tema["text"])
 
     style.configure(
+        "TEntry",
+        padding=7,
+        fieldbackground=tema["surface_2"],
+        background=tema["surface_2"],
+        foreground=tema["text"],
+        insertcolor=tema["text"],
+        bordercolor=tema["border_soft"],
+        lightcolor=tema["border_soft"],
+        darkcolor=tema["border_soft"],
+    )
+    style.map(
+        "TEntry",
+        fieldbackground=[("disabled", tema["surface_3"]), ("focus", tema["surface_2"])],
+        foreground=[("disabled", tema["text_muted"])],
+        bordercolor=[("focus", tema["focus_ring"])],
+    )
+
+    style.configure(
         "TScrollbar",
         background=tema["surface_2"],
         troughcolor=tema["bg"],
@@ -140,6 +158,26 @@ def configure_styles(root: tk.Misc, theme_name: str | None = None) -> ttk.Style:
 def bind_escape_to_close(dialog: tk.Toplevel) -> None:
     """Padroniza o cancelamento por Escape em modais Tkinter."""
     dialog.bind("<Escape>", lambda _event: dialog.destroy())
+
+
+def bind_mousewheel_tree(widget: tk.Misc, scrollable: tk.Misc) -> None:
+    """Encaminha a roda usada sobre qualquer filho para a área rolável."""
+    def scroll(event):
+        delta = getattr(event, "delta", 0)
+        if delta:
+            units = -1 if delta > 0 else 1
+        else:
+            units = -1 if getattr(event, "num", 0) == 4 else 1
+        scrollable.yview_scroll(units, "units")
+        return "break"
+
+    pending = [widget]
+    while pending:
+        current = pending.pop()
+        current.bind("<MouseWheel>", scroll)
+        current.bind("<Button-4>", scroll)
+        current.bind("<Button-5>", scroll)
+        pending.extend(current.winfo_children())
 
 
 _BACKGROUND_COLOR_KEYS = (
@@ -284,7 +322,7 @@ def apply_theme_to_widget_tree(
 
 
 class FocusHelper:
-    """Helper para aplicar anel de foco evidente via teclado (Variante A - Dourado)."""
+    """Aplique anel de foco dourado e evidente via teclado."""
 
     @staticmethod
     def attach(
@@ -905,6 +943,11 @@ class SearchInput(tk.Frame):
             self.entry.insert(0, self.placeholder)
             self.entry.config(fg=tema["text_muted"])
 
+    def value(self) -> str:
+        """Retorna somente texto digitado, sem expor o placeholder visual."""
+        current = self.entry.get()
+        return "" if self.placeholder and current == self.placeholder else current
+
 
 class DataTable(ttk.Treeview):
     """Tabela de dados customizada padronizada com o tema."""
@@ -986,13 +1029,13 @@ class BaseModal(tk.Toplevel):
         height: int = 420,
     ):
         super().__init__(parent)
+        self.withdraw()
         self.parent = parent
         tema = obter_tema_atual()
 
         self.title(title)
         self.configure(bg=tema["bg"])
         self.transient(parent)
-        self.grab_set()
 
         # Centralizar na janela principal
         parent.update_idletasks()
@@ -1001,10 +1044,12 @@ class BaseModal(tk.Toplevel):
         p_w = parent.winfo_width()
         p_h = parent.winfo_height()
 
-        x = p_x + max(0, (p_w - width) // 2)
-        y = p_y + max(0, (p_h - height) // 2)
+        width = min(width, max(360, self.winfo_screenwidth() - 48))
+        height = min(height, max(320, self.winfo_screenheight() - 80))
+        x = max(12, p_x + max(0, (p_w - width) // 2))
+        y = max(12, p_y + max(0, (p_h - height) // 2))
         self.geometry(f"{width}x{height}+{x}+{y}")
-        self.minsize(width, height)
+        self.minsize(min(420, width), min(320, height))
 
         # Header do modal
         self.header_frame = tk.Frame(self, bg=tema["surface"], padx=18, pady=14)
@@ -1032,6 +1077,16 @@ class BaseModal(tk.Toplevel):
         self.footer_frame.pack(fill="x")
 
         self.bind("<Escape>", lambda _e: self.close())
+        self.after_idle(self.show)
+
+    def show(self):
+        """Exibe o modal já montado e assume foco somente nesse momento."""
+        if not self.winfo_exists():
+            return
+        self.update_idletasks()
+        self.deiconify()
+        self.lift()
+        self.grab_set()
 
     def close(self):
         try:

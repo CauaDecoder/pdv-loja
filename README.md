@@ -1,20 +1,33 @@
 # Caixa Basilica
 
-Aplicacao desktop de PDV e estoque da Loja da Basilica, construída em Python/Tkinter com banco SQLite local.
+Aplicacao desktop de PDV e estoque da Loja da Basilica, construída em Python/Tkinter. A operacao atual usa SQLite local em um unico computador. O codigo da Central permanece disponivel, mas sua implantacao esta adiada.
 
 ## Instalacao e execucao
 
-Requer Python 3.10+ no Windows. O Tkinter normalmente acompanha a instalacao do Python.
+Ambiente validado: Python 3.12.10 no Windows. O Tkinter normalmente acompanha a instalacao do Python.
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python main.py
-# ou: python -m app
+python -m app
+# Central somente por ativacao explicita futura: python -m app --central
+# servidor central: python -m app.server
 ```
 
-O banco principal fica em `data/loja.db`. As dependencias declaradas sao `openpyxl`, `matplotlib` e `pytest`.
+## Instalador Windows
+
+Para uso diário, instale pelo arquivo `Instalador-Caixa-Basilica-<versão>.exe` gerado em `installer/output/`. O instalador cria atalho no Menu Iniciar e, se selecionado, na Área de Trabalho. Depois, abra pelo ícone **Caixa Basílica**; não precisa de terminal nem comando.
+
+Dados operacionais do programa instalado ficam em `%LOCALAPPDATA%\Loja da Basilica\`: banco, backups e relatórios. Atualizar ou desinstalar o aplicativo não apaga esses dados.
+
+Para gerar instalador em computador de desenvolvimento com [uv](https://docs.astral.sh/uv/) e Inno Setup 6 instalados:
+
+```powershell
+.\installer\build_installer.ps1 -Version 1.0.0
+```
+
+Não coloque o banco em pasta compartilhada. Cada instalação mantém dados operacionais fora do código-fonte, em diretório local do usuário.
 
 ## Organizacao
 
@@ -72,7 +85,7 @@ Modos disponiveis:
 
 - **Atualizar estoque pelo Disponível**: ajusta produtos novos e existentes para o saldo informado.
 - **Preservar estoque atual**: atualiza cadastro, preco e custo sem alterar saldos.
-- **Inventário inicial**: aplica o saldo informado somente a produtos novos e preserva produtos existentes.
+- **Inventário inicial**: permitido somente quando não existem produtos nem movimentações; cria o cadastro e o saldo inicial completo.
 
 A conferencia mostra produtos lidos, insercoes, atualizacoes, ignorados, soma de Disponível, Custo Total da planilha, valores calculados, cadastros incompletos, estoques invalidos e duplicados. Se a diferenca entre o Custo Total informado e o valor a custo calculado superar R$ 0,05, o sistema alerta antes da gravacao.
 
@@ -83,7 +96,7 @@ Os indicadores financeiros sao separados:
 - **Valor a custo** = `estoque × custo_unitario`
 - **Valor a venda** = `estoque × preco`
 
-Quando o custo nao esta cadastrado, o valor a custo daquele produto e zero. O sistema nao estima mais custo como `preco × 0,6`. A dashboard, o painel e o relatorio de estoque identificam claramente cada valor.
+Quando o custo nao esta cadastrado, o valor a custo conhecido exclui aquele produto e o custo ausente e sinalizado. O sistema nao presume custo zero nem estima custo como `preco × 0,6`. A dashboard, o painel e o relatorio de estoque identificam claramente cada valor.
 
 ## Backup e restauracao
 
@@ -102,12 +115,11 @@ Mantenha copias da pasta `backups/` também fora do computador da loja.
 python -m pytest -q
 ```
 
-Os testes cobrem mapeamento Conta Azul, descarte da linha `CUSTO TOTAL`, importacao e modos de estoque, baixa por venda, valores a custo/venda, entrada, perda, inventario, status e backup/restauracao.
+Os testes cobrem schema v2, transacoes, idempotencia, importacao, reconciliacao de estoque, Vendas no caixa simples e mistas, Correcoes pos-venda, fechamento, relatorios XLSX e backup/restauracao.
 
 ## Recomendacoes futuras
 
 - Extrair gradualmente caixa, historico e dialogos remanescentes de `app/ui/app_window.py`.
 - Armazenar quantidade reservada em coluna propria.
-- Trocar valores monetarios internos para `Decimal` em uma migracao controlada.
 - Agendar copia externa criptografada dos backups.
 - Adicionar teste visual/manual documentado para os principais fluxos Tkinter.

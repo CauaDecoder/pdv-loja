@@ -129,6 +129,54 @@ class SistemaVisualTest(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_modal_so_aparece_depois_da_montagem(self):
+        """Modal deve nascer oculto para não piscar vazio antes do conteúdo."""
+        try:
+            root = tk.Tk()
+            root.geometry("800x600")
+            root.update()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            modal = components.BaseModal(root, "Pagamento", width=500, height=400)
+            self.assertEqual(modal.state(), "withdrawn")
+            tk.Label(modal.body_frame, text="Conteúdo pronto").pack()
+            root.update()
+            self.assertEqual(modal.state(), "normal")
+            modal.close()
+        finally:
+            root.destroy()
+
+    def test_roda_do_mouse_funciona_sobre_filhos_de_area_rolavel(self):
+        """Roda sobre card ou texto deve rolar o Canvas ancestral."""
+        try:
+            root = tk.Tk()
+            root.geometry("400x300")
+            root.update()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            canvas = tk.Canvas(root, height=100)
+            canvas.pack(fill="both", expand=True)
+            frame = tk.Frame(canvas)
+            canvas.create_window((0, 0), window=frame, anchor="nw")
+            labels = [tk.Label(frame, text=f"Linha {i}") for i in range(40)]
+            for label in labels:
+                label.pack()
+            root.update()
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            components.bind_mousewheel_tree(frame, canvas)
+            antes = canvas.yview()[0]
+            labels[10].event_generate("<MouseWheel>", delta=-120)
+            root.update()
+            self.assertGreater(canvas.yview()[0], antes)
+        finally:
+            root.destroy()
+
     def test_toggle_switch_respeita_interacao_e_estado_disabled(self):
         """Alternador dispara callback por interação e bloqueia mudanças desabilitado."""
         try:
@@ -192,6 +240,31 @@ class SistemaVisualTest(unittest.TestCase):
             root.destroy()
             tema.definir_tema_atual("claro")
 
+    def test_campos_ttk_sao_legiveis_no_tema_escuro(self):
+        """Campos de data e texto ttk não podem manter o fundo branco no tema escuro."""
+        tema.definir_tema_atual("escuro")
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except tk.TclError:
+            tema.definir_tema_atual("claro")
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            style = components.configure_styles(root, "escuro")
+            self.assertEqual(
+                style.lookup("TEntry", "fieldbackground"),
+                tema.TEMA_ESCURO["surface_2"],
+            )
+            self.assertEqual(
+                style.lookup("TEntry", "foreground"),
+                tema.TEMA_ESCURO["text"],
+            )
+        finally:
+            root.destroy()
+            tema.definir_tema_atual("claro")
+
     def test_notebook_interno_usa_estilo_sem_moldura(self):
         """Notebook interno mantém abas e remove a moldura externa."""
         try:
@@ -245,22 +318,98 @@ class SistemaVisualTest(unittest.TestCase):
 
                 painel = PainelEstoque(root)
                 painel.pack(fill="both", expand=True)
+                root.geometry("1100x700")
+                root.deiconify()
+                root.update()
                 self.assertIsInstance(painel, PainelEstoque)
-                self.assertFalse(painel._filtros_content.winfo_manager())
+                self.assertTrue(
+                    painel._search_input.winfo_ismapped(),
+                    "A pesquisa deve estar disponível assim que a aba Produtos abrir",
+                )
+                self.assertFalse(painel._filtros_content.winfo_ismapped())
                 painel._btn_toggle_filtros.invoke()
-                self.assertTrue(painel._filtros_content.winfo_manager())
+                root.update()
+                self.assertTrue(painel._filtros_content.winfo_ismapped())
+                self.assertEqual(painel._btn_toggle_filtros.cget("text"), "Ocultar filtros ▴")
+                painel._btn_toggle_filtros.invoke()
+                root.update()
+                self.assertFalse(painel._filtros_content.winfo_ismapped())
+                self.assertTrue(painel._search_input.winfo_ismapped())
+                self.assertEqual(painel._btn_toggle_filtros.cget("text"), "Mostrar filtros ▾")
                 painel.atualizar()
                 painel._limpar_filtros()
-                root.deiconify()
-                root.geometry("1000x700")
+                root.geometry("760x700")
                 root.update()
                 self.assertEqual(painel._kpi_columns, 4)
-                root.geometry("1200x700")
+                root.geometry("1000x700")
                 root.update()
                 self.assertEqual(painel._kpi_columns, 8)
             finally:
                 database.DB_PATH = db_path_original
                 root.destroy()
+
+    def test_caixa_local_carrega_produtos_e_preserva_area_util_da_tabela(self):
+        """A aba Produtos deve carregar no modo local e manter a tabela utilizável."""
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.destroy()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        db_path_original = database.DB_PATH
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database.DB_PATH = Path(temp_dir) / "loja_teste.db"
+            try:
+                database.inicializar()
+                with database.get_conn() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO produtos (codigo, nome, preco_centavos, estoque)
+                        VALUES ('VISUAL', 'Produto visível', 1000, 5)
+                        """
+                    )
+
+                from app.ui.app_window import CaixaApp
+
+                app = CaixaApp()
+                app.geometry("1100x700")
+                app.update()
+                app._notebook.select(app._aba_estoque)
+                app._estoque_notebook.select(1)
+                app.update()
+
+                self.assertEqual(len(app._estoque_panel._produtos), 1)
+                self.assertEqual(len(app._estoque_panel._tree.get_children()), 1)
+                self.assertTrue(app._estoque_panel._search_input.winfo_ismapped())
+                self.assertFalse(app._estoque_panel._filtros_content.winfo_ismapped())
+                self.assertGreaterEqual(app._estoque_panel._tree.winfo_height(), 250)
+                altura_tabela_recolhida = app._estoque_panel._tree.winfo_height()
+
+                app._estoque_panel._btn_toggle_filtros.invoke()
+                app.update()
+                self.assertTrue(app._estoque_panel._filtros_content.winfo_ismapped())
+                self.assertEqual(
+                    app._estoque_panel._btn_toggle_filtros.cget("text"),
+                    "Ocultar filtros ▴",
+                )
+                self.assertTrue(app._estoque_panel._lbl_resultados.winfo_ismapped())
+                self.assertEqual(
+                    app._estoque_panel._tree.winfo_height(),
+                    altura_tabela_recolhida,
+                    "Mostrar filtros não pode reduzir a área da tabela",
+                )
+
+                app._estoque_panel._btn_toggle_filtros.invoke()
+                app.update()
+                self.assertFalse(app._estoque_panel._filtros_content.winfo_ismapped())
+                self.assertTrue(app._estoque_panel._search_input.winfo_ismapped())
+                self.assertGreaterEqual(app._estoque_panel._tree.winfo_height(), 250)
+            finally:
+                if "app" in locals():
+                    app.destroy()
+                database.DB_PATH = db_path_original
 
 
 if __name__ == "__main__":

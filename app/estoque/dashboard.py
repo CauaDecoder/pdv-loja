@@ -5,7 +5,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from app import database as db
+from app.runtime import database as db
 from app.ui import theme
 from app.ui.components import Card, EmptyState, PageHeader
 from app.ui.theme import (
@@ -39,18 +39,21 @@ def renderizar_grafico(frame, figure):
 
 
 class DashboardEstoque(tk.Frame):
-    def __init__(self, parent):
+    def __init__(self, parent, autoload: bool = True, loader=None):
         super().__init__(parent, bg=theme.FUNDO)
         self._cards: dict[str, tk.Label] = {}
         self._graficos_frame: tk.Frame | None = None
         self._acoes_tree: ttk.Treeview | None = None
         self._canvas: tk.Canvas | None = None
         self._scroll_widgets: set[str] = set()
+        self._snapshot: dict = {}
+        self._loader = loader
         self._build_ui()
-        self.atualizar()
+        if autoload:
+            self.solicitar_atualizacao()
 
     def _build_ui(self):
-        PageHeader(self, "Dashboard de estoque", "Visao rapida de saldo, risco e giro dos produtos.", "Atualizar dashboard", self.atualizar).pack(
+        PageHeader(self, "Dashboard de estoque", "Visao rapida de saldo, risco e giro dos produtos.", "Atualizar dashboard", self.solicitar_atualizacao).pack(
             fill="x", padx=ESPACOS["lg"], pady=ESPACOS["lg"]
         )
 
@@ -121,13 +124,20 @@ class DashboardEstoque(tk.Frame):
         tk.Label(card, text=subtitulo, bg=theme.BRANCO, fg=theme.MUTED, font=FONTES["corpo"], wraplength=180, justify="left").pack(anchor="w")
         self._cards[chave] = valor
 
-    def atualizar(self):
-        resumo = db.dashboard_resumo_estoque()
+    def atualizar(self, snapshot: dict | None = None):
+        self._snapshot = snapshot or db.snapshot_dashboard_estoque()
+        resumo = self._snapshot["resumo"]
         for chave, label in self._cards.items():
             valor = resumo.get(chave, 0)
             label.config(text=moeda(valor) if chave.startswith("valor_") else str(valor))
         self._renderizar_graficos()
         self._renderizar_acoes(resumo.get("produtos_acao", []))
+
+    def solicitar_atualizacao(self) -> None:
+        if self._loader:
+            self._loader(self.atualizar)
+        else:
+            self.atualizar()
 
     def _limpar_frame(self, frame: tk.Frame):
         for child in frame.winfo_children():
@@ -172,7 +182,7 @@ class DashboardEstoque(tk.Frame):
         self._bind_mousewheel_recursivo(self._graficos_frame)
 
     def _grafico_status(self, figura):
-        dados = db.dashboard_status_estoque()
+        dados = self._snapshot["status"]
         ax = figura.axes[0]
         labels = [d["status"] for d in dados]
         valores = [d["total"] for d in dados]
@@ -180,7 +190,7 @@ class DashboardEstoque(tk.Frame):
         ax.tick_params(labelsize=8)
 
     def _grafico_abc(self, figura):
-        dados = db.dashboard_curva_abc()
+        dados = self._snapshot["curva_abc"]
         ax = figura.axes[0]
         valores = [d["total"] for d in dados if d["total"]]
         labels = [d["curva"] for d in dados if d["total"]]
@@ -188,25 +198,25 @@ class DashboardEstoque(tk.Frame):
             ax.pie(valores, labels=labels, autopct="%1.0f%%", textprops={"fontsize": 8})
 
     def _grafico_categorias(self, figura):
-        dados = list(reversed(db.dashboard_valor_por_categoria()))
+        dados = list(reversed(self._snapshot["categorias"]))
         ax = figura.axes[0]
         ax.barh([d["categoria"][:28] for d in dados], [d["valor"] for d in dados], color=theme.AZUL)
         ax.tick_params(labelsize=8)
 
     def _grafico_valor_parado(self, figura):
-        dados = list(reversed(db.dashboard_top_valor_parado()))
+        dados = list(reversed(self._snapshot["valor_parado"]))
         ax = figura.axes[0]
         ax.barh([d["nome"][:28] for d in dados], [d["valor"] for d in dados], color=theme.VERDE_ESC)
         ax.tick_params(labelsize=8)
 
     def _grafico_vendidos(self, figura):
-        dados = list(reversed(db.dashboard_top_vendidos()))
+        dados = list(reversed(self._snapshot["vendidos"]))
         ax = figura.axes[0]
         ax.barh([d["nome"][:28] for d in dados], [d["quantidade"] for d in dados], color=theme.AZUL)
         ax.tick_params(labelsize=8)
 
     def _grafico_movimentos(self, figura):
-        dados = db.dashboard_movimentacoes_periodo()
+        dados = self._snapshot["movimentacoes"]
         ax = figura.axes[0]
         datas = [d["data_iso"][5:] for d in dados]
         ax.plot(datas, [d["entradas"] or 0 for d in dados], label="Entradas", color=theme.VERDE_ESC)

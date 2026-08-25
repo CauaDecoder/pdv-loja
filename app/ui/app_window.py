@@ -19,12 +19,16 @@ Requisitos: Python 3.10+, openpyxl
 """
 
 import tkinter as tk
+import queue
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from app import database as db
+from app.contracts import valor_para_centavos
+from app.runtime import close_remote_client, create_backup, database as db, pending_sales, period_report, remote_mode, reports as reports_runtime, restore_backup, sales as sales_runtime, sync_pending_sales
 from app.payments import (
     CARD_BRANDS,
     CARD_INSTALLMENTS,
@@ -34,7 +38,7 @@ from app.payments import (
     parse_currency,
     summarize_payment,
 )
-from app.services import backup_service, importacao_service, relatorios_service
+from app.services import importacao_service
 from app.ui.importacao_view import ImportacaoGuidedView
 from app.ui.relatorios_view import RelatoriosView
 from app.ui.vendas_correcoes_view import VendasCorrecoesView
@@ -57,6 +61,7 @@ from app.ui.components import (
     action_button,
     apply_theme_to_widget_tree,
     bind_escape_to_close,
+    bind_mousewheel_tree,
     configure_styles,
 )
 from app.ui.theme import (
@@ -66,6 +71,12 @@ from app.ui.theme import (
     obter_nome_tema_atual,
 )
 PLACEHOLDER_BUSCA = "Escaneie o código ou busque pelo nome"
+
+
+class StartupError(RuntimeError):
+    """Erro operacional já apresentado ao usuário durante a abertura."""
+
+
 @dataclass(slots=True)
 class CartRowWidgets:
     """Mantém referências dos widgets mutáveis de uma linha do carrinho."""
@@ -242,20 +253,37 @@ class CaixaApp(tk.Tk):
         self.minsize(760, 560)
         self.configure(bg=theme.TEMA_ATUAL["fundo"])
 
-        db.inicializar()
+        try:
+            db.inicializar()
+        except Exception as error:
+            self.withdraw()
+            messagebox.showerror(
+                "PDV não iniciado",
+                "O banco local não pôde ser aberto com segurança. Nenhum dado foi alterado.\n\n"
+                f"Detalhe: {error}\n\n"
+                "Feche outras instâncias. Se o banco ainda não estiver no schema v2, execute o reset "
+                "orientado antes da primeira operação.",
+                parent=self,
+            )
+            tk.Tk.destroy(self)
+            raise StartupError(str(error)) from error
         configure_styles(self, obter_nome_tema_atual())
 
         self._data_hoje = datetime.now().strftime("%d/%m/%Y")
         self._periodo_id = 0
         self._periodo_seq = 1
         self._num_venda = 1
+        self._sale_uuid = str(uuid.uuid4())
         self._carrinho: list[dict] = []
         self._pagamento: str | None = None
         self._pagamento_detalhe = ""
         self._valor_recebido: float | None = None
         self._troco: float | None = None
+        self._pagamentos_estruturados: list[dict] = []
+        self._destinos_disponiveis: dict[str, int] = {}
         self._vendas_dia = 0
         self._total_dia = 0.0
+        self._correcoes_periodo = 0
         self._resultados_busca: list = []
         self._feedback_apos_venda: str | None = None
         self._feedback_after_id: str | None = None
@@ -264,6 +292,16 @@ class CaixaApp(tk.Tk):
         self._clock_after_id: str | None = None
         self._atualizando_responsavel = False
         self._layout_compacto = False
+        self._closed = False
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="caixa-remote")
+        self._background_results: queue.Queue = queue.Queue()
+        self._background_after_id: str | None = None
+        self._search_debounce_id: str | None = None
+        self._search_generation = 0
+        self._search_inflight: dict[int, str] = {}
+        self._search_result_term = ""
+        self._search_enter_generation: int | None = None
+        self._sync_after_id: str | None = None
 
         self._frame_sugestoes: tk.Frame | None = None
         self._lst_sugestoes: tk.Listbox | None = None
@@ -273,9 +311,52 @@ class CaixaApp(tk.Tk):
         self._compacto_altura = False
 
         self._build_ui()
-        self._abrir_periodo_para_data(self._data_hoje)
+        self._background_after_id = self.after(20, self._drain_background)
+        self._notebook.bind("<<NotebookTabChanged>>", self._on_main_tab_changed, add="+")
+        if remote_mode():
+            self._submit_background(
+                lambda: db.contexto_inicial_venda_no_caixa(self._data_hoje),
+                self._complete_initial_context,
+            )
+        else:
+            self._abrir_periodo_para_data(self._data_hoje)
         self._atualizar_relogio()
         self._atualizar_status_fluxo()
+        self._sync_after_id = self.after(3000, self._sincronizar_pendencias)
+
+    def _sincronizar_pendencias(self):
+        """Tenta enviar vendas offline sem interromper o atendimento."""
+        self._sync_after_id = None
+        if not self._closed:
+            self._submit_background(sync_pending_sales, self._complete_pending_sync)
+
+    def _complete_pending_sync(self, _result, _error=None) -> None:
+        if not self._closed:
+            self._sync_after_id = self.after(10000, self._sincronizar_pendencias)
+
+    def _submit_background(self, work, done) -> None:
+        """Run remote I/O and return its result through the Tkinter event loop."""
+        future = self._executor.submit(work)
+
+        def enqueue(completed):
+            try:
+                self._background_results.put((done, completed.result(), None))
+            except Exception as error:
+                self._background_results.put((done, None, error))
+
+        future.add_done_callback(enqueue)
+
+    def _drain_background(self) -> None:
+        """Apply worker results only from the Tkinter thread."""
+        self._background_after_id = None
+        while not self._closed:
+            try:
+                callback, result, error = self._background_results.get_nowait()
+            except queue.Empty:
+                break
+            callback(result, error)
+        if not self._closed:
+            self._background_after_id = self.after(20, self._drain_background)
 
     # ------------------------------------------------------------------
     # Construcao da interface
@@ -309,19 +390,54 @@ class CaixaApp(tk.Tk):
         self._body = tk.Frame(self._aba_venda, bg=theme.TEMA_ATUAL["fundo"])
         self._body.pack(fill="both", expand=True)
         self._body.columnconfigure(0, weight=1)
-        self._body.columnconfigure(1, weight=0, minsize=336)
+        self._body.columnconfigure(1, weight=0, minsize=300)
         self._body.rowconfigure(0, weight=1)
+        self._sale_content = self._body
 
         self._build_left(self._body)
         self._build_right(self._body)
         self._build_footer(self._aba_venda)
-        self._build_vendas_correcoes_tab()
-        self._build_estoque_tab()
-        self._build_importacao_tab()
-        self._build_relatorios_tab()
-        self._build_configuracoes_tab()
+        if remote_mode():
+            self._lazy_tab_builders = {
+                str(self._aba_vendas_correcoes): self._build_vendas_correcoes_tab,
+                str(self._aba_estoque): self._build_estoque_tab,
+                str(self._aba_importacao): self._build_importacao_tab,
+                str(self._aba_relatorios): self._build_relatorios_tab,
+                str(self._aba_configuracoes): self._build_configuracoes_tab,
+            }
+            for tab in self._lazy_tab_builders:
+                frame = self.nametowidget(tab)
+                tk.Label(
+                    frame,
+                    text="Carregando ao abrir esta aba…",
+                    bg=theme.TEMA_ATUAL["fundo"],
+                    fg=theme.TEMA_ATUAL["text_muted"],
+                    font=("Segoe UI", 11),
+                ).pack(pady=40)
+        else:
+            self._build_vendas_correcoes_tab()
+            self._build_estoque_tab()
+            self._build_importacao_tab()
+            self._build_relatorios_tab()
+            self._build_configuracoes_tab()
         self._registrar_atalhos_operacionais()
         self.bind("<Configure>", self._ajustar_layout_responsivo)
+
+    def _on_main_tab_changed(self, _event=None) -> None:
+        """Build remote tabs on demand and renew the sales list when it opens."""
+        tab = self._notebook.select()
+        builder = getattr(self, "_lazy_tab_builders", {}).pop(tab, None)
+        if builder:
+            self.after_idle(self._build_selected_tab, tab, builder)
+            return
+        if tab == str(getattr(self, "_aba_vendas_correcoes", "")):
+            self._atualizar_historico()
+
+    def _build_selected_tab(self, tab: str, builder) -> None:
+        frame = self.nametowidget(tab)
+        for child in frame.winfo_children():
+            child.destroy()
+        builder()
 
     def _build_estoque_tab(self):
         """Monta as subabas internas do modulo de estoque."""
@@ -340,17 +456,66 @@ class CaixaApp(tk.Tk):
         self._estoque_notebook.add(aba_movimentacoes, text="Movimentações")
         self._estoque_notebook.add(aba_config, text="Configurações")
 
-        self._estoque_dashboard = DashboardEstoque(aba_dashboard)
+        dashboard_loader = None
+        if remote_mode():
+            dashboard_loader = lambda done: self._submit_background(
+                db.snapshot_dashboard_estoque,
+                lambda snapshot, error: self._complete_background_view(done, snapshot, error),
+            )
+        self._estoque_dashboard = DashboardEstoque(
+            aba_dashboard, autoload=True, loader=dashboard_loader
+        )
         self._estoque_dashboard.pack(fill="both", expand=True)
-        self._estoque_panel = PainelEstoque(aba_produtos)
+        if remote_mode():
+            self._lazy_stock_builders = {
+                str(aba_produtos): lambda: self._build_stock_products(aba_produtos),
+                str(aba_movimentacoes): lambda: self._build_stock_movements(aba_movimentacoes),
+                str(aba_config): lambda: self._build_stock_settings(aba_config),
+            }
+            self._estoque_notebook.bind("<<NotebookTabChanged>>", self._on_stock_tab_changed, add="+")
+        else:
+            self._build_stock_products(aba_produtos)
+            self._build_stock_movements(aba_movimentacoes)
+            self._build_stock_settings(aba_config)
+
+    def _on_stock_tab_changed(self, _event=None) -> None:
+        tab = self._estoque_notebook.select()
+        builder = getattr(self, "_lazy_stock_builders", {}).pop(tab, None)
+        if builder:
+            self.after_idle(builder)
+
+    def _build_stock_products(self, parent) -> None:
+        panel_loader = None
+        if remote_mode():
+            panel_loader = lambda done: self._submit_background(
+                db.snapshot_operacional_estoque,
+                lambda snapshot, error: self._complete_background_view(done, snapshot, error),
+            )
+        self._estoque_panel = PainelEstoque(parent, autoload=True, loader=panel_loader)
         self._estoque_panel.pack(fill="both", expand=True)
-        self._estoque_movimentacoes = MovimentacoesEstoque(aba_movimentacoes)
+
+    def _complete_background_view(self, done, data, error=None) -> None:
+        if error:
+            messagebox.showerror("Central indisponível", "Não foi possível atualizar os dados.")
+            return
+        done(data)
+
+    def _complete_stock_load(self, view, snapshot, error=None) -> None:
+        if error:
+            messagebox.showerror("Central indisponível", "Não foi possível carregar os dados de estoque.")
+            return
+        view.atualizar(snapshot)
+
+    def _build_stock_movements(self, parent) -> None:
+        self._estoque_movimentacoes = MovimentacoesEstoque(parent)
         self._estoque_movimentacoes.pack(fill="both", expand=True)
-        self._estoque_configuracoes = ConfiguracoesEstoque(aba_config)
+
+    def _build_stock_settings(self, parent) -> None:
+        self._estoque_configuracoes = ConfiguracoesEstoque(parent)
         self._estoque_configuracoes.pack(fill="both", expand=True)
 
     def _build_topbar(self):
-        """Cria o cabecalho com titulo, data, horario e numero da venda (Variante A)."""
+        """Cria o cabeçalho original com título, data, horário e número da venda."""
         tema = theme.TEMA_ATUAL
         bar = tk.Frame(self, bg=tema["shell"], height=74)
         self._topbar = bar
@@ -403,20 +568,41 @@ class CaixaApp(tk.Tk):
         left.grid(row=0, column=0, sticky="nsew")
 
         pad = tk.Frame(left, bg=theme.BRANCO)
+        self._sale_pad = pad
         pad.pack(fill="both", expand=True, padx=18, pady=16)
 
         search_card = Card(pad, padding=16)
+        self._search_card = search_card
         search_card.pack(fill="x", pady=(0, 12))
 
         search_hdr = tk.Frame(search_card, bg=theme.BRANCO)
         search_hdr.pack(fill="x")
-        tk.Label(search_hdr, text="Escaneie o código ou busque pelo nome", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(side="left")
-        tk.Label(search_hdr, text="[F2]", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 8, "bold"), padx=4, pady=1).pack(side="right")
+        tk.Label(
+            search_hdr,
+            text="Escaneie o código ou busque pelo nome",
+            bg=theme.BRANCO,
+            fg=theme.MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left")
+        tk.Label(
+            search_hdr,
+            text="[F2]",
+            bg=theme.FUNDO2,
+            fg=theme.MUTED,
+            font=("Segoe UI", 8, "bold"),
+            padx=4,
+            pady=1,
+        ).pack(side="right")
 
         self._var_busca = tk.StringVar()
         search_panel = tk.Frame(search_card, bg=theme.BRANCO, pady=16)
+        self._search_panel = search_panel
         search_panel.pack(fill="x")
-        search = SearchInput(search_panel, self._var_busca, "Buscar por nome, código ou código de barras... [F2]")
+        search = SearchInput(
+            search_panel,
+            self._var_busca,
+            "Buscar por nome, código ou código de barras... [F2]",
+        )
         search.pack(fill="x")
         self._entry_busca = search.entry
         self._entry_busca.bind("<Return>", self._on_enter_busca)
@@ -425,7 +611,17 @@ class CaixaApp(tk.Tk):
         self._focus_after_id = self.after(100, self._focar_busca_inicial)
 
         self._frame_sugestoes = tk.Frame(search_card, bg=theme.BRANCO)
-        self._lst_sugestoes = tk.Listbox(self._frame_sugestoes, font=("Segoe UI", 10), bg=theme.BRANCO, fg=theme.TEXTO, selectbackground=theme.VERDE_CLAR, selectforeground=theme.VERDE_ESC, relief="flat", activestyle="none", highlightthickness=0)
+        self._lst_sugestoes = tk.Listbox(
+            self._frame_sugestoes,
+            font=("Segoe UI", 10),
+            bg=theme.BRANCO,
+            fg=theme.TEXTO,
+            selectbackground=theme.VERDE_CLAR,
+            selectforeground=theme.VERDE_ESC,
+            relief="flat",
+            activestyle="none",
+            highlightthickness=0,
+        )
         self._lst_sugestoes.pack(fill="both", expand=True)
         self._lst_sugestoes.bind("<<ListboxSelect>>", self._on_selecionar_sugestao)
         self._lst_sugestoes.bind("<Return>", self._on_selecionar_sugestao)
@@ -442,6 +638,7 @@ class CaixaApp(tk.Tk):
         tk.Label(right_hdr, text="TOTAL", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 8, "bold"), width=11, anchor="e").pack(side="left", padx=(10, 0))
         tk.Label(right_hdr, text="", bg=theme.FUNDO2, width=8).pack(side="left", padx=(0, 10))
 
+        # Mantidos para a lógica existente, sem criar uma segunda faixa visual.
         self._lbl_resumo_carrinho = tk.Label(pad, text="Carrinho vazio")
         self._btn_limpar = tk.Button(pad, text="Limpar", command=self._limpar_carrinho)
 
@@ -460,8 +657,10 @@ class CaixaApp(tk.Tk):
         self._canvas_window = self._canvas_cart.create_window((0, 0), window=self._inner_cart, anchor="nw")
         self._inner_cart.bind("<Configure>", self._ajustar_scroll_carrinho)
         self._canvas_cart.bind("<Configure>", self._ajustar_largura_carrinho)
+        bind_mousewheel_tree(self._inner_cart, self._canvas_cart)
 
         dash = tk.Frame(pad, bg=theme.BRANCO)
+        self._sale_dash = dash
         dash.pack(fill="x", side="bottom", pady=(12, 0))
         for i in range(3):
             dash.columnconfigure(i, weight=1, uniform="dash")
@@ -470,11 +669,12 @@ class CaixaApp(tk.Tk):
         self._kpi_hoje.grid(row=0, column=0, padx=(0, 4), sticky="nsew")
         self._kpi_vendas = KpiCard(dash, label="Vendas", value="0", tone="default")
         self._kpi_vendas.grid(row=0, column=1, padx=4, sticky="nsew")
-        self._kpi_correcoes = KpiCard(dash, label="Correções", value="4", tone="default")
+        self._kpi_correcoes = KpiCard(dash, label="Correções", value="0", tone="default")
         self._kpi_correcoes.grid(row=0, column=2, padx=(4, 0), sticky="nsew")
 
         # Atalhos discretos no rodape do painel esquerdo
         bar_atalhos = tk.Frame(pad, bg=theme.FUNDO2, padx=8, pady=4)
+        self._shortcut_bar = bar_atalhos
         bar_atalhos.pack(fill="x", side="bottom", pady=(8, 0))
         tk.Label(
             bar_atalhos,
@@ -522,11 +722,12 @@ class CaixaApp(tk.Tk):
         self._right_canvas.bind("<Configure>", self._ajustar_largura_lateral)
         self._right_canvas.bind("<MouseWheel>", self._rolar_painel_lateral)
 
-        self._card_status = Card(pad, padding=16)
-        self._card_status.pack(fill="x", pady=(0, 12))
-        tk.Label(self._card_status, text="Status da venda", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self._lbl_status_fluxo = tk.Label(self._card_status, text="Foco na busca, carrinho válido e Pix selecionado.", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9), wraplength=270, justify="left")
-        self._lbl_status_fluxo.pack(anchor="w", pady=(2, 12))
+        self._card_status = Card(pad, padding=10)
+        self._card_status.pack(fill="x", pady=(0, 7))
+        self._lbl_status_title = tk.Label(self._card_status, text="Status da venda", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 11, "bold"))
+        self._lbl_status_title.pack(anchor="w")
+        self._lbl_status_fluxo = tk.Label(self._card_status, text="Período aberto · operação local.", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9), wraplength=270, justify="left")
+        self._lbl_status_fluxo.pack(anchor="w", pady=(1, 5))
         
         self._status_pills = tk.Frame(self._card_status, bg=theme.BRANCO)
         self._status_pills.pack(fill="x")
@@ -534,7 +735,22 @@ class CaixaApp(tk.Tk):
 
         self._var_responsavel = tk.StringVar()
         self._var_responsavel.trace_add("write", self._salvar_responsavel_periodo)
-        
+        tk.Label(
+            self._card_status,
+            text="Operador",
+            bg=theme.BRANCO,
+            fg=theme.MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", pady=(5, 2))
+        self._entry_responsavel = tk.Entry(
+            self._card_status,
+            textvariable=self._var_responsavel,
+            font=("Segoe UI", 10),
+            relief="solid",
+            bd=1,
+        )
+        self._entry_responsavel.pack(fill="x", ipady=3)
+
         self._card_pagamento = Card(pad, padding=16)
         self._card_pagamento.pack(fill="x", pady=(0, 12))
         tk.Label(self._card_pagamento, text="Pagamento", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 14, "bold")).pack(anchor="w")
@@ -562,21 +778,54 @@ class CaixaApp(tk.Tk):
             btn.configure(activebackground=theme.VERDE_CLAR, activeforeground=theme.VERDE_ESC)
             btn.grid(row=row, column=col, columnspan=2 if nome == "Mais de uma forma" else 1, padx=4, pady=4, sticky="nsew")
             self._btns_pgto[nome] = btn
-            
+
+        destino_linha = tk.Frame(self._card_pagamento, bg=theme.BRANCO)
+        destino_linha.pack(fill="x", pady=(8, 0))
+        tk.Label(destino_linha, text="Destino financeiro", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self._var_destino_financeiro = tk.StringVar()
+        self._destino_box = ttk.Combobox(destino_linha, textvariable=self._var_destino_financeiro, state="readonly")
+        self._destino_box.pack(fill="x", pady=(4, 0))
+
         panel_totais = tk.Frame(self._card_pagamento, bg=theme.FUNDO2, padx=12, pady=12)
         panel_totais.pack(fill="x", pady=(12, 0))
-        tk.Label(panel_totais, text="Total da venda", bg=theme.FUNDO2, fg=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
-        
+        tk.Label(
+            panel_totais,
+            text="Total da venda",
+            bg=theme.FUNDO2,
+            fg=theme.MUTED,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w")
         row_total = tk.Frame(panel_totais, bg=theme.FUNDO2)
         row_total.pack(fill="x", pady=(4, 0))
-        self._lbl_total = tk.Label(row_total, text="R$ 0,00", bg=theme.FUNDO2, fg=theme.VERDE_ESC, font=("Segoe UI", 24, "bold"))
+        self._lbl_total = tk.Label(
+            row_total,
+            text="R$ 0,00",
+            bg=theme.FUNDO2,
+            fg=theme.VERDE_ESC,
+            font=("Segoe UI", 24, "bold"),
+        )
         self._lbl_total.pack(side="left")
-        self._badge_pronta = StatusBadge(row_total, "Pronta para finalizar", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"])
-        
+        self._badge_pronta = StatusBadge(
+            row_total,
+            "Pronta para finalizar",
+            bg=theme.TEMA_ATUAL["primary_soft"],
+            fg=theme.TEMA_ATUAL["primary"],
+        )
         self._lbl_n_itens = tk.Label(panel_totais, text="")
         self._lbl_n_unid = tk.Label(panel_totais, text="")
-        self._lbl_pgto_resumo = tk.Label(panel_totais, text="")
+        self._lbl_pgto_resumo = tk.Label(
+            panel_totais,
+            text="",
+            bg=theme.FUNDO2,
+            fg=theme.TEXTO,
+            font=("Segoe UI", 9, "bold"),
+            justify="left",
+            anchor="w",
+            wraplength=250,
+        )
         self._lbl_forma_pgto = tk.Label(panel_totais, text="")
+
+        bind_mousewheel_tree(pad, self._right_canvas)
 
     def _build_footer(self, parent):
         """Cria o rodape com indicadores do periodo e acoes globais."""
@@ -587,6 +836,15 @@ class CaixaApp(tk.Tk):
 
         acoes_footer = tk.Frame(footer, bg=theme.BRANCO)
         acoes_footer.pack(side="right", padx=12, pady=6)
+        action_button(
+            acoes_footer,
+            text="Fechar Período da Loja",
+            command=self._encerrar_dia,
+            variant="danger",
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=5,
+        ).pack(side="right")
         stats = tk.Frame(footer, bg=theme.BRANCO)
         stats.pack(side="left", fill="x", expand=True, padx=16, pady=8)
         tk.Label(stats, text="Período", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(side="left")
@@ -598,17 +856,29 @@ class CaixaApp(tk.Tk):
         tk.Label(stats, text="Total do período", bg=theme.BRANCO, fg=theme.MUTED, font=("Segoe UI", 9)).pack(side="left")
         self._lbl_total_dia = tk.Label(stats, text="R$ 0,00", bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 9, "bold"))
         self._lbl_total_dia.pack(side="left", padx=(4, 0))
-
-        acoes_footer = tk.Frame(footer, bg=theme.BRANCO)
-        acoes_footer.pack(side="right", padx=12, pady=6)
-
     def _build_vendas_correcoes_tab(self):
         """Monta a aba de Vendas e correções (evoluída de Últimas vendas para Issue #15)."""
         self._vendas_correcoes_view = VendasCorrecoesView(
             self._aba_vendas_correcoes,
-            on_sale_updated=self._atualizar_painel_estoque,
+            on_sale_updated=self._apos_atualizacao_venda,
+            autoload=not remote_mode(),
+            loader=(
+                (
+                    lambda filtros, done: self._submit_background(
+                        lambda: sales_runtime.consultar_vendas_correcoes(filtros),
+                        lambda resultado, error: self._complete_background_view(done, resultado, error),
+                    )
+                )
+                if remote_mode()
+                else None
+            ),
         )
         self._vendas_correcoes_view.pack(fill="both", expand=True)
+        if remote_mode():
+            self._submit_background(
+                lambda: sales_runtime.consultar_vendas_correcoes(),
+                lambda resultado, error: self._complete_lazy_view(self._vendas_correcoes_view, resultado, error),
+            )
 
     def _build_history_tab(self):
         """Compatibilidade para montagem do histórico de vendas."""
@@ -627,8 +897,21 @@ class CaixaApp(tk.Tk):
         self._relatorios_view = RelatoriosView(
             self._aba_relatorios,
             periodo_id_provider=lambda: getattr(self, "_periodo_id", 1),
+            destinos=list(getattr(self, "_initial_destinations", [])) if remote_mode() else None,
+            autoload=not remote_mode(),
         )
         self._relatorios_view.pack(fill="both", expand=True)
+        if remote_mode():
+            self._submit_background(
+                lambda: reports_runtime.obter_fechamento_financeiro(self._periodo_id),
+                lambda dados, error: self._complete_lazy_view(self._relatorios_view, dados, error),
+            )
+
+    def _complete_lazy_view(self, view, data, error=None) -> None:
+        if error:
+            messagebox.showerror("Central indisponível", "Não foi possível carregar a aba selecionada.")
+            return
+        view.atualizar(data)
 
     def _build_configuracoes_tab(self):
         """Monta a aba de Configurações e Manutenção (Tema claro/escuro, Backup/Restauração)."""
@@ -679,6 +962,145 @@ class CaixaApp(tk.Tk):
 
         action_button(card_maint, text="Criar backup", command=self._criar_backup, variant="primary").pack(anchor="w", fill="x", pady=(0, 8))
         action_button(card_maint, text="Restaurar backup", command=self._restaurar_backup, variant="danger").pack(anchor="w", fill="x")
+
+        card_destinos = Card(grid, padding=20)
+        card_destinos.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(16, 0))
+        SectionHeader(card_destinos, "Destinos financeiros", "Cadastre onde cada forma de pagamento é recebida.").pack(anchor="w", fill="x", pady=(0, 12))
+        corpo_destinos = tk.Frame(card_destinos, bg=theme.TEMA_ATUAL["surface"])
+        corpo_destinos.pack(fill="x")
+        tema = theme.TEMA_ATUAL
+        corpo_destinos.columnconfigure(0, weight=1)
+        corpo_destinos.columnconfigure(1, weight=1)
+        self._lista_destinos = tk.Listbox(
+            corpo_destinos,
+            height=6,
+            font=("Segoe UI", 10),
+            bg=tema["surface_2"],
+            fg=tema["text"],
+            selectbackground=tema["primary_soft"],
+            selectforeground=tema["text"],
+            highlightbackground=tema["border_soft"],
+            highlightcolor=tema["focus_ring"],
+            relief="flat",
+        )
+        self._lista_destinos.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self._lista_destinos.bind("<<ListboxSelect>>", self._carregar_destino_selecionado)
+        formulario = tk.Frame(corpo_destinos, bg=theme.TEMA_ATUAL["surface"])
+        formulario.grid(row=0, column=1, sticky="nsew")
+        self._var_nome_destino = tk.StringVar()
+        StyledEntry(formulario, textvariable=self._var_nome_destino, bg=tema["surface_2"], fg=tema["text"]).pack(fill="x", ipady=6, pady=(0, 6))
+        self._vars_formas_destino = {forma: tk.BooleanVar() for forma in ("Dinheiro", "Pix", "Debito", "Credito")}
+        formas_linha = tk.Frame(formulario, bg=theme.TEMA_ATUAL["surface"])
+        formas_linha.pack(fill="x", pady=(0, 8))
+        for forma, var in self._vars_formas_destino.items():
+            tk.Checkbutton(
+                formas_linha,
+                text=forma,
+                variable=var,
+                bg=tema["surface"],
+                fg=tema["text"],
+                selectcolor=tema["surface_2"],
+                activebackground=tema["surface"],
+                activeforeground=tema["text"],
+            ).pack(side="left", padx=(0, 8))
+        acoes_destinos = tk.Frame(formulario, bg=tema["surface"])
+        acoes_destinos.pack(fill="x")
+        botoes_destinos = [
+            action_button(acoes_destinos, text="Adicionar destino", command=self._adicionar_destino, variant="primary"),
+            action_button(acoes_destinos, text="Atualizar selecionado", command=self._atualizar_destino, variant="secondary"),
+            action_button(acoes_destinos, text="Tornar padrão", command=self._definir_destino_padrao, variant="secondary"),
+            action_button(acoes_destinos, text="Inativar selecionado", command=self._inativar_destino, variant="danger"),
+        ]
+        for indice, botao in enumerate(botoes_destinos):
+            acoes_destinos.columnconfigure(indice, weight=1)
+            botao.grid(row=0, column=indice, sticky="ew", padx=(0 if indice == 0 else 6, 0))
+
+        def ajustar_destinos(event):
+            estreito = event.width < 760
+            self._lista_destinos.grid_configure(
+                row=0,
+                column=0,
+                columnspan=2 if estreito else 1,
+                padx=0 if estreito else (0, 12),
+                pady=(0, 10) if estreito else 0,
+            )
+            formulario.grid_configure(row=1 if estreito else 0, column=0 if estreito else 1, columnspan=2 if estreito else 1)
+
+        corpo_destinos.bind("<Configure>", ajustar_destinos)
+
+        def ajustar_configuracoes(event):
+            estreito = event.width < 760
+            card_tema.grid_configure(row=0, column=0, columnspan=2 if estreito else 1, padx=0 if estreito else (0, 8))
+            card_maint.grid_configure(
+                row=1 if estreito else 0,
+                column=0 if estreito else 1,
+                columnspan=2 if estreito else 1,
+                padx=0 if estreito else (8, 0),
+                pady=(10, 0) if estreito else 0,
+            )
+            card_destinos.grid_configure(row=2 if estreito else 1, pady=(10 if estreito else 16, 0))
+
+        grid.bind("<Configure>", ajustar_configuracoes)
+        self._recarregar_destinos()
+
+    def _recarregar_destinos(self):
+        self._destinos_config = db.listar_destinos_financeiros(incluir_inativos=True)
+        self._lista_destinos.delete(0, "end")
+        for destino in self._destinos_config:
+            status = "ativo" if destino["ativo"] else "inativo"
+            self._lista_destinos.insert("end", f"{destino['nome']} — {destino['formas']} ({status})")
+
+    def _adicionar_destino(self):
+        formas = [forma for forma, var in self._vars_formas_destino.items() if var.get()]
+        try:
+            db.criar_destino_financeiro(self._var_nome_destino.get(), formas)
+            self._var_nome_destino.set("")
+            for var in self._vars_formas_destino.values():
+                var.set(False)
+            self._recarregar_destinos()
+        except Exception as erro:
+            messagebox.showerror("Destino financeiro", str(erro))
+
+    def _carregar_destino_selecionado(self, _event=None):
+        selecao = self._lista_destinos.curselection()
+        if not selecao:
+            return
+        destino = self._destinos_config[selecao[0]]
+        self._var_nome_destino.set(destino["nome"])
+        formas = set(destino["formas"].split(","))
+        for forma, var in self._vars_formas_destino.items():
+            var.set(forma in formas)
+
+    def _inativar_destino(self):
+        selecao = self._lista_destinos.curselection()
+        if not selecao:
+            return
+        db.inativar_destino_financeiro(int(self._destinos_config[selecao[0]]["id"]))
+        self._recarregar_destinos()
+
+    def _atualizar_destino(self):
+        selecao = self._lista_destinos.curselection()
+        if not selecao:
+            return
+        formas = [forma for forma, var in self._vars_formas_destino.items() if var.get()]
+        try:
+            db.atualizar_destino_financeiro(
+                int(self._destinos_config[selecao[0]]["id"]), self._var_nome_destino.get(), formas
+            )
+            self._recarregar_destinos()
+        except Exception as erro:
+            messagebox.showerror("Destino financeiro", str(erro))
+
+    def _definir_destino_padrao(self):
+        selecao = self._lista_destinos.curselection()
+        if not selecao:
+            return
+        formas = [forma for forma, var in self._vars_formas_destino.items() if var.get()]
+        try:
+            db.definir_destino_padrao(int(self._destinos_config[selecao[0]]["id"]), formas)
+            self._recarregar_destinos()
+        except Exception as erro:
+            messagebox.showerror("Destino financeiro", str(erro))
 
     def _alternar_tema(self, nome_tema: str):
         """Alterna dinamicamente entre tema claro e escuro."""
@@ -737,13 +1159,57 @@ class CaixaApp(tk.Tk):
     # Busca de produtos
     # ------------------------------------------------------------------
     def _on_busca(self, *_):
-        """Consulta o banco conforme o usuario digita e exibe sugestoes."""
+        """Agenda Busca de produto sem bloquear a thread Tkinter."""
         termo = self._var_busca.get().strip()
+        if self._search_debounce_id:
+            self.after_cancel(self._search_debounce_id)
+            self._search_debounce_id = None
+        self._search_generation += 1
+        generation = self._search_generation
         if not termo or termo == PLACEHOLDER_BUSCA:
             self._esconder_sugestoes()
             return
+        if hasattr(self, "_lbl_status_fluxo"):
+            self._lbl_status_fluxo.config(text="Buscando produto…")
+        self._search_debounce_id = self.after(180, self._start_product_search, termo, generation, False)
 
-        resultados = db.buscar_produto(termo)
+    def _start_product_search(self, termo: str, generation: int, enter: bool) -> None:
+        """Start at most one remote query for a term generation."""
+        self._search_debounce_id = None
+        if generation in self._search_inflight:
+            if enter:
+                self._search_enter_generation = generation
+            return
+        self._search_inflight[generation] = termo
+        if enter:
+            self._search_enter_generation = generation
+        search = getattr(self, "_search", db.buscar_produto)
+        self._submit_background(
+            lambda: list(search(termo)),
+            lambda results, error: self._complete_product_search(generation, termo, results, error),
+        )
+
+    def _complete_product_search(self, generation: int, termo: str, resultados, error=None) -> None:
+        """Discard stale results and expose only the current Busca de produto."""
+        self._search_inflight.pop(generation, None)
+        if self._closed or generation != self._search_generation or self._var_busca.get().strip() != termo:
+            return
+        if error:
+            self._esconder_sugestoes()
+            if hasattr(self, "_lbl_status_fluxo"):
+                self._lbl_status_fluxo.config(text="Central indisponível. Verifique a conexão.")
+            return
+        self._search_result_term = termo
+        if hasattr(self, "_atualizar_status_fluxo"):
+            self._atualizar_status_fluxo()
+        enter = self._search_enter_generation == generation
+        self._search_enter_generation = None
+        if enter and self._add_best_product_match(termo, resultados):
+            return
+        self._render_product_results(resultados)
+
+    def _render_product_results(self, resultados) -> None:
+        """Render current suggestions after remote work completes."""
         if not resultados or not self._lst_sugestoes or not self._frame_sugestoes:
             self._esconder_sugestoes()
             return
@@ -819,23 +1285,29 @@ class CaixaApp(tk.Tk):
         return "break"
 
     def _on_enter_busca(self, _=None):
-        """Adiciona o item mais provavel ou correspondencia unica quando o operador pressiona Enter."""
+        """Reuse a valid result or finish one asynchronous query on Enter."""
         termo = self._var_busca.get().strip()
         if not termo or termo == PLACEHOLDER_BUSCA:
             return
+        if self._search_result_term == termo and self._add_best_product_match(termo, self._resultados_busca):
+            return "break"
+        if self._search_debounce_id:
+            self.after_cancel(self._search_debounce_id)
+            self._search_debounce_id = None
+        generation = self._search_generation
+        self._start_product_search(termo, generation, True)
+        return "break"
 
-        resultado = db.buscar_produto(termo)
-        if resultado:
-            for prod in resultado:
-                if prod["codigo"] == termo or prod["cod_barras"] == termo:
-                    self._adicionar_produto(dict(prod))
-                    return
-            if len(resultado) == 1:
-                self._adicionar_produto(dict(resultado[0]))
-                return
-
-        if len(self._resultados_busca) == 1:
-            self._adicionar_produto(dict(self._resultados_busca[0]))
+    def _add_best_product_match(self, termo: str, resultados) -> bool:
+        """Add an exact code match or the sole valid result."""
+        for product in resultados or []:
+            if product["codigo"] == termo or product.get("cod_barras") == termo:
+                self._adicionar_produto(dict(product))
+                return True
+        if len(resultados or []) == 1:
+            self._adicionar_produto(dict(resultados[0]))
+            return True
+        return False
 
     def _focar_sugestao(self, _=None):
         """Move o foco do teclado para a primeira sugestao encontrada."""
@@ -933,16 +1405,12 @@ class CaixaApp(tk.Tk):
             self._cart_rows.clear()
             self._frame_vazio.pack(fill="both", expand=True)
             self._frame_carrinho.pack_forget()
-            if hasattr(self, '_btn_limpar'):
-                self._btn_limpar.pack_forget()
             if hasattr(self, '_lbl_resumo_carrinho'):
                 self._lbl_resumo_carrinho.config(text="Carrinho vazio")
             return
 
         self._frame_vazio.pack_forget()
         self._frame_carrinho.pack(fill="both", expand=True)
-        if hasattr(self, '_btn_limpar'):
-            self._btn_limpar.pack_forget()
         total_itens = sum(item["quantidade"] for item in self._carrinho)
         if hasattr(self, '_lbl_resumo_carrinho'):
             self._lbl_resumo_carrinho.config(text=f"{len(self._carrinho)} itens | {total_itens} unidades")
@@ -997,7 +1465,7 @@ class CaixaApp(tk.Tk):
             subtotal_label = tk.Label(controls, bg=theme.BRANCO, fg=theme.TEXTO, font=("Segoe UI", 10, "bold"), width=11, anchor="e")
             subtotal_label.pack(side="left", padx=(10, 0))
 
-            action_button(controls, text="Editar", variant="ghost", command=lambda p=produto_id: self._remover_item(p), font=("Segoe UI", 9)).pack(side="left", padx=(10, 0))
+            action_button(controls, text="Remover", variant="ghost", command=lambda p=produto_id: self._remover_item(p), font=("Segoe UI", 9)).pack(side="left", padx=(10, 0))
 
             widgets = CartRowWidgets(
                 row=row,
@@ -1012,6 +1480,7 @@ class CaixaApp(tk.Tk):
             
             if i < len(self._carrinho) - 1:
                 tk.Frame(self._inner_cart, bg=theme.BORDER_LIGHT, height=1).pack(fill="x", padx=10)
+        bind_mousewheel_tree(self._inner_cart, self._canvas_cart)
 
     def _atualizar_linha_carrinho(self, item: dict, widgets: CartRowWidgets) -> None:
         widgets.nome.configure(text=item["nome"])
@@ -1037,9 +1506,18 @@ class CaixaApp(tk.Tk):
         self._lbl_total.config(text=moeda(total))
         self._lbl_n_itens.config(text=str(itens))
         self._lbl_n_unid.config(text=str(unidades))
-        self._lbl_pgto_resumo.config(text=self._resumo_pagamento())
+        self._atualizar_resumo_pagamento_lateral()
         self._atualizar_btn_finalizar()
         self._atualizar_status_fluxo()
+
+    def _atualizar_resumo_pagamento_lateral(self) -> None:
+        """Mostra forma e detalhes estruturados sem ocupar espaço quando vazios."""
+        resumo = self._resumo_pagamento()
+        self._lbl_pgto_resumo.config(text=resumo)
+        if self._pagamento:
+            self._lbl_pgto_resumo.pack(fill="x", pady=(8, 0))
+        else:
+            self._lbl_pgto_resumo.pack_forget()
 
     # ------------------------------------------------------------------
     # Pagamento
@@ -1061,9 +1539,10 @@ class CaixaApp(tk.Tk):
             self._troco = None
 
         self._pagamento = nome
+        self._atualizar_destinos_pagamento(nome)
         for forma, botao in self._btns_pgto.items():
             if forma == nome:
-                botao.config(bg=theme.PGTO_BG[nome], fg=theme.PGTO_FG[nome], relief="solid", bd=2)
+                botao.config(bg=theme.PGTO_BG[nome], fg=theme.PGTO_FG[nome], relief="flat", bd=0)
             else:
                 botao.config(bg=theme.FUNDO2, fg=theme.TEXTO, relief="flat", bd=0)
         self._atualizar_totais()
@@ -1081,6 +1560,48 @@ class CaixaApp(tk.Tk):
         self._pagamento_detalhe = ""
         self._valor_recebido = None
         self._troco = None
+        self._pagamentos_estruturados = []
+        if hasattr(self, "_var_destino_financeiro"):
+            self._var_destino_financeiro.set("")
+
+    def _atualizar_destinos_pagamento(self, forma: str) -> None:
+        """Carrega destinos compatíveis e mantém o primeiro como padrão."""
+        if forma == "Mais de uma forma":
+            self._destinos_disponiveis = {}
+            self._destino_box.configure(values=())
+            self._var_destino_financeiro.set("Definido por parcela")
+            return
+        destinos = []
+        self._destinos_disponiveis = {}
+        todos_destinos = self._listar_destinos_financeiros()
+        todos_destinos.sort(key=lambda item: (forma not in item.get("formas_padrao", ""), item["nome"]))
+        for destino in todos_destinos:
+            if forma in destino["formas"]:
+                destinos.append(destino["nome"])
+                self._destinos_disponiveis[destino["nome"]] = int(destino["id"])
+        self._destino_box.configure(values=destinos)
+        self._var_destino_financeiro.set(destinos[0] if destinos else "")
+
+    def _listar_destinos_financeiros(self) -> list[dict]:
+        """Normaliza respostas locais sqlite3.Row e respostas remotas JSON."""
+        destinos = list(getattr(self, "_initial_destinations", [])) or db.listar_destinos_financeiros()
+        return [dict(destino) for destino in destinos]
+
+    def _pagamentos_da_venda(self) -> list[dict]:
+        """Monta parcelas estruturadas para persistência central."""
+        if self._pagamento == "Mais de uma forma":
+            return self._pagamentos_estruturados
+        pagamento = {
+            "forma": self._pagamento,
+            "valor_centavos": valor_para_centavos(self._total_carrinho()),
+            "detalhe": self._pagamento_detalhe,
+            "valor_recebido_centavos": valor_para_centavos(self._valor_recebido) if self._valor_recebido is not None else None,
+            "troco_centavos": valor_para_centavos(self._troco) if self._troco is not None else None,
+        }
+        destino = self._var_destino_financeiro.get()
+        if destino in self._destinos_disponiveis:
+            pagamento["destino_id"] = self._destinos_disponiveis[destino]
+        return [pagamento]
 
     def _total_carrinho(self) -> float:
         """Retorna o total monetario da venda em andamento."""
@@ -1105,11 +1626,11 @@ class CaixaApp(tk.Tk):
         """Abre um dialog para valor recebido e calculo de troco."""
         total = self._total_carrinho()
         dialog = tk.Toplevel(self)
+        dialog.withdraw()
         dialog.title("Pagamento em dinheiro")
         dialog.configure(bg=theme.FUNDO)
         dialog.resizable(False, False)
         dialog.transient(self)
-        dialog.grab_set()
         bind_escape_to_close(dialog)
         configure_styles(dialog)
 
@@ -1158,7 +1679,16 @@ class CaixaApp(tk.Tk):
         tk.Button(botoes, text="Cancelar", bg=theme.FUNDO2, fg=theme.MUTED, relief="flat", command=dialog.destroy).pack(side="right", padx=(8, 0), ipadx=10, ipady=6)
         tk.Button(botoes, text="Confirmar", bg=theme.VERDE_ESC, fg=theme.BRANCO, relief="flat", command=confirmar).pack(side="right", ipadx=10, ipady=6)
         entrada.bind("<Return>", lambda _event: confirmar())
-        entrada.focus()
+        dialog.update_idletasks()
+        largura = max(420, dialog.winfo_reqwidth())
+        altura = max(260, dialog.winfo_reqheight())
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - largura) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - altura) // 2)
+        dialog.geometry(f"{largura}x{altura}+{x}+{y}")
+        dialog.deiconify()
+        dialog.lift()
+        dialog.grab_set()
+        entrada.focus_set()
         self.wait_window(dialog)
 
         if not resultado["ok"]:
@@ -1206,8 +1736,30 @@ class CaixaApp(tk.Tk):
             forma: tk.BooleanVar(value=False)
             for forma in MIXED_PAYMENT_METHODS
         }
+        valores_parcela = {forma: tk.StringVar(value="0,00") for forma in MIXED_PAYMENT_METHODS}
+        destinos_por_forma: dict[str, list[tuple[str, int, bool]]] = {forma: [] for forma in MIXED_PAYMENT_METHODS}
+        destinos_cadastrados = self._listar_destinos_financeiros()
+        for destino in destinos_cadastrados:
+            for forma in MIXED_PAYMENT_METHODS:
+                if forma in destino["formas"]:
+                    destinos_por_forma[forma].append((destino["nome"], int(destino["id"]), forma in destino.get("formas_padrao", "")))
+        for forma in destinos_por_forma:
+            destinos_por_forma[forma].sort(key=lambda item: (not item[2], item[0]))
+        destinos_vars = {
+            forma: tk.StringVar(value=opcoes[0][0] if opcoes else "")
+            for forma, opcoes in destinos_por_forma.items()
+        }
         detalhes_cartao = {}
         total_venda = self._total_carrinho()
+
+        def redistribuir_valores():
+            selecionadas = [forma for forma, var in vars_pgto.items() if var.get()]
+            if not selecionadas:
+                return
+            total_centavos = valor_para_centavos(total_venda)
+            base, resto = divmod(total_centavos, len(selecionadas))
+            for indice, forma in enumerate(selecionadas):
+                valores_parcela[forma].set(f"{(base + (1 if indice < resto else 0)) / 100:.2f}".replace(".", ","))
 
         def detalhe_texto(forma: str) -> str:
             info = detalhes_cartao.get(forma, {})
@@ -1235,9 +1787,13 @@ class CaixaApp(tk.Tk):
             if not info:
                 return
             if vars_pgto[forma].get():
-                info["card"].pack(fill="x", pady=(8, 0))
+                info["parcela"].pack(fill="x", pady=(6, 0))
+                if info.get("card"):
+                    info["card"].pack(fill="x", pady=(8, 0))
             else:
-                info["card"].pack_forget()
+                info["parcela"].pack_forget()
+                if info.get("card"):
+                    info["card"].pack_forget()
 
         for forma in MIXED_PAYMENT_METHODS:
             linha = Card(frame, padding=10)
@@ -1259,13 +1815,21 @@ class CaixaApp(tk.Tk):
                 padx=14,
                 pady=8,
                 cursor="hand2",
-                command=lambda f=forma: atualizar_visibilidade(f),
+                command=lambda f=forma: (redistribuir_valores(), atualizar_visibilidade(f)),
             )
             check.pack(fill="x", anchor="w")
 
+            parcela = tk.Frame(linha, bg=tema["surface"], padx=10, pady=8)
+            detalhes_cartao[forma] = {"parcela": parcela}
+            tk.Label(parcela, text="Valor desta parcela", bg=tema["surface"], fg=tema["text_muted"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
+            StyledEntry(parcela, textvariable=valores_parcela[forma]).pack(fill="x", pady=(3, 6))
+            tk.Label(parcela, text="Destino financeiro", bg=tema["surface"], fg=tema["text_muted"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
+            ttk.Combobox(parcela, textvariable=destinos_vars[forma], values=[nome for nome, _, _ in destinos_por_forma[forma]], state="readonly").pack(fill="x", pady=(3, 0))
+            parcela.pack_forget()
+
             if forma in ("Debito", "Credito"):
                 detalhe_card = tk.Frame(linha, bg=tema["surface"], padx=10, pady=8)
-                detalhes_cartao[forma] = {"card": detalhe_card}
+                detalhes_cartao[forma]["card"] = detalhe_card
 
                 bandeira_var = tk.StringVar(value=CARD_BRANDS[0])
                 detalhes_cartao[forma]["bandeira_var"] = bandeira_var
@@ -1302,16 +1866,15 @@ class CaixaApp(tk.Tk):
                     )
 
                 detalhe_card.pack_forget()
-                atualizar_visibilidade(forma)
             elif forma == "Dinheiro":
                 detalhe_card = tk.Frame(linha, bg=tema["surface"], padx=10, pady=8)
                 valor_var = tk.StringVar()
                 troco_var = tk.StringVar(value=f"Troco: {moeda(0)}")
-                detalhes_cartao[forma] = {
+                detalhes_cartao[forma].update({
                     "card": detalhe_card,
                     "valor_var": valor_var,
                     "troco_var": troco_var,
-                }
+                })
 
                 tk.Label(
                     detalhe_card,
@@ -1338,19 +1901,18 @@ class CaixaApp(tk.Tk):
                     font=FONTES["subtitulo"],
                 ).pack(anchor="w")
 
-                def atualizar_troco(*_, var=valor_var, destino=troco_var):
+                def atualizar_troco(*_, var=valor_var, destino=troco_var, forma_atual=forma):
                     try:
                         valor = self._parse_moeda(var.get())
+                        parcela = self._parse_moeda(valores_parcela[forma_atual].get())
                     except ValueError:
                         destino.set(f"Troco: {moeda(0)}")
                         return
-                    destino.set(f"Troco: {moeda(max(valor - total_venda, 0))}")
+                    destino.set(f"Troco: {moeda(max(valor - parcela, 0))}")
 
                 valor_var.trace_add("write", atualizar_troco)
                 detalhe_card.pack_forget()
-                atualizar_visibilidade(forma)
-            else:
-                tk.Frame(linha, bg=tema["surface"]).pack(fill="x")
+            atualizar_visibilidade(forma)
 
         erro_var = tk.StringVar(value="")
         tk.Label(frame, textvariable=erro_var, bg=tema["bg"], fg=tema["danger"], font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0))
@@ -1362,7 +1924,24 @@ class CaixaApp(tk.Tk):
                 erro_var.set("Selecione pelo menos duas formas.")
                 return
             partes = []
+            pagamentos = []
+            soma_centavos = 0
             for forma in selecionadas:
+                try:
+                    valor_centavos = valor_para_centavos(
+                        self._parse_moeda(valores_parcela[forma].get())
+                    )
+                except ValueError:
+                    erro_var.set(f"Informe um valor válido para {PAYMENT_LABELS[forma]}.")
+                    return
+                if valor_centavos <= 0:
+                    erro_var.set(f"O valor de {PAYMENT_LABELS[forma]} deve ser maior que zero.")
+                    return
+                destino_nome = destinos_vars[forma].get()
+                destino_id = next((identificador for nome, identificador, _ in destinos_por_forma[forma] if nome == destino_nome), None)
+                if destino_id is None:
+                    erro_var.set(f"Configure um destino financeiro para {PAYMENT_LABELS[forma]}.")
+                    return
                 if forma in ("Debito", "Credito"):
                     detalhe = detalhe_texto(forma)
                     partes.append(f"{forma} ({detalhe})" if detalhe else forma)
@@ -1378,16 +1957,28 @@ class CaixaApp(tk.Tk):
                     partes.append(f"Dinheiro ({detalhe})")
                 else:
                     partes.append(forma)
+                    detalhe = ""
+                pagamentos.append({"forma": forma, "destino_id": destino_id, "valor_centavos": valor_centavos, "detalhe": detalhe})
+                soma_centavos += valor_centavos
+            if soma_centavos != valor_para_centavos(total_venda):
+                erro_var.set(f"A soma das parcelas deve ser {moeda(total_venda)}.")
+                return
             valor_recebido = None
             troco = None
             if "Dinheiro" in selecionadas:
                 valor_recebido = self._parse_moeda(detalhes_cartao["Dinheiro"]["valor_var"].get())
-                troco = max(valor_recebido - total_venda, 0)
+                valor_dinheiro = self._parse_moeda(valores_parcela["Dinheiro"].get())
+                troco = max(valor_recebido - valor_dinheiro, 0)
+                for pagamento_item in pagamentos:
+                    if pagamento_item["forma"] == "Dinheiro":
+                        pagamento_item["valor_recebido_centavos"] = valor_para_centavos(valor_recebido)
+                        pagamento_item["troco_centavos"] = valor_para_centavos(troco)
             resultado.update({
                 "ok": True,
                 "detalhe": " + ".join(partes),
                 "valor_recebido": valor_recebido,
                 "troco": troco,
+                "pagamentos": pagamentos,
             })
             dialog.close()
 
@@ -1395,6 +1986,8 @@ class CaixaApp(tk.Tk):
             side="right", padx=(8, 0)
         )
         action_button(dialog.footer_frame, text="Confirmar", variant="primary", command=confirmar).pack(side="right")
+        bind_mousewheel_tree(frame, canvas)
+        dialog.show()
         self.wait_window(dialog)
 
         if not resultado["ok"]:
@@ -1402,6 +1995,7 @@ class CaixaApp(tk.Tk):
         self._pagamento_detalhe = resultado["detalhe"]
         self._valor_recebido = resultado.get("valor_recebido")
         self._troco = resultado.get("troco")
+        self._pagamentos_estruturados = resultado.get("pagamentos", [])
         return True
 
     def _criar_grade_opcoes(
@@ -1513,6 +2107,7 @@ class CaixaApp(tk.Tk):
         )
         action_button(dialog.footer_frame, text="Confirmar", variant="primary", command=confirmar).pack(side="right")
         dialog.bind("<Return>", lambda _event: confirmar())
+        dialog.show()
         self.wait_window(dialog)
 
         if not resultado["ok"]:
@@ -1562,6 +2157,7 @@ class CaixaApp(tk.Tk):
             
             if self._pagamento:
                 StatusBadge(self._status_pills, "Pagamento selecionado", bg=theme.TEMA_ATUAL["primary_soft"], fg=theme.TEMA_ATUAL["primary"]).pack(anchor="w", pady=(0, 6))
+            bind_mousewheel_tree(self._right_pad, self._right_canvas)
 
         if not self._pagamento:
             self._lbl_status_fluxo.config(text="Foco na busca e carrinho válido. Selecione um pagamento.")
@@ -1580,11 +2176,51 @@ class CaixaApp(tk.Tk):
         """Persiste automaticamente o responsavel quando o campo muda."""
         if self._atualizando_responsavel or not self._periodo_id:
             return
-        db.atualizar_responsavel_periodo(self._periodo_id, self._responsavel_atual())
+        if remote_mode():
+            periodo_id = self._periodo_id
+            responsavel = self._responsavel_atual()
+            self._submit_background(
+                lambda: db.atualizar_responsavel_periodo(periodo_id, responsavel),
+                lambda _result, _error: None,
+            )
+        else:
+            db.atualizar_responsavel_periodo(self._periodo_id, self._responsavel_atual())
 
     # ------------------------------------------------------------------
     # Periodos e vendas
     # ------------------------------------------------------------------
+    def _aplicar_totais_periodo(self, totais: dict) -> None:
+        """Atualiza rodapé e KPIs com valores persistidos do Período da Loja."""
+        self._vendas_dia = int(totais.get("transacoes") or 0)
+        self._total_dia = float(totais.get("total") or 0)
+        self._correcoes_periodo = int(totais.get("correcoes") or 0)
+        self._lbl_vendas_dia.config(text=str(self._vendas_dia))
+        self._lbl_total_dia.config(text=moeda(self._total_dia))
+        if "_lbl_header_vendas" in self.__dict__:
+            self._lbl_header_vendas.config(text=str(self._vendas_dia))
+            self._lbl_header_total.config(text=moeda(self._total_dia))
+        self._kpi_hoje.value_label.config(text=moeda(self._total_dia))
+        self._kpi_vendas.value_label.config(text=str(self._vendas_dia))
+        self._kpi_correcoes.value_label.config(text=str(self._correcoes_periodo))
+
+    def _atualizar_resumo_periodo(self) -> None:
+        """Recarrega KPIs após Venda, Correção pós-venda ou Cancelamento."""
+        if not self._periodo_id:
+            return
+        if remote_mode():
+            periodo_id = self._periodo_id
+            self._submit_background(
+                lambda: db.totais_periodo(periodo_id),
+                lambda totais, erro: None if erro else self._aplicar_totais_periodo(totais),
+            )
+            return
+        self._aplicar_totais_periodo(db.totais_periodo(self._periodo_id))
+
+    def _apos_atualizacao_venda(self) -> None:
+        """Sincroniza estoque e resumo quando uma venda é corrigida."""
+        self._atualizar_painel_estoque()
+        self._atualizar_resumo_periodo()
+
     def _abrir_periodo_para_data(self, data: str):
         """Carrega ou cria o periodo aberto correspondente a uma data."""
         periodo = db.obter_ou_criar_periodo_aberto(data)
@@ -1594,13 +2230,11 @@ class CaixaApp(tk.Tk):
         self._periodo_id = periodo["id"]
         self._periodo_seq = periodo["sequencia"]
         self._num_venda = db.proximo_num_venda(self._periodo_id)
-        self._vendas_dia = totais["transacoes"]
-        self._total_dia = totais["total"]
-
         self._lbl_data.config(text=self._data_hoje)
         self._lbl_periodo.config(text=f"{self._periodo_seq:02d}")
-        self._lbl_vendas_dia.config(text=str(self._vendas_dia))
-        self._lbl_total_dia.config(text=moeda(self._total_dia))
+        if "_lbl_header_periodo" in self.__dict__:
+            self._lbl_header_periodo.config(text=f"{self._periodo_seq:02d}")
+        self._aplicar_totais_periodo(totais)
 
         self._atualizando_responsavel = True
         self._var_responsavel.set(periodo["responsavel"] or "")
@@ -1610,44 +2244,115 @@ class CaixaApp(tk.Tk):
         self._atualizar_totais()
         self._atualizar_historico()
 
+    def _complete_initial_context(self, context, error=None) -> None:
+        """Apply the aggregated opening context after the first useful paint."""
+        if error:
+            self._lbl_status_fluxo.config(text="Central indisponível. Venda offline disponível conforme permissão.")
+            return
+        periodo = context["periodo"]
+        totais = context["totais"]
+        self._initial_destinations = context["destinos"]
+        self._data_hoje = periodo["data"]
+        self._periodo_id = periodo["id"]
+        self._periodo_seq = periodo["sequencia"]
+        self._num_venda = context["proximo_num_venda"]
+        self._lbl_data.config(text=self._data_hoje)
+        self._lbl_periodo.config(text=f"{self._periodo_seq:02d}")
+        if "_lbl_header_periodo" in self.__dict__:
+            self._lbl_header_periodo.config(text=f"{self._periodo_seq:02d}")
+        self._aplicar_totais_periodo(totais)
+        self._atualizando_responsavel = True
+        self._var_responsavel.set(periodo["responsavel"] or "")
+        self._atualizando_responsavel = False
+        self._atualizar_badge_venda()
+        self._atualizar_totais()
+
     def _finalizar_venda(self):
         """Grava a venda, atualiza indicadores e prepara o proximo atendimento."""
         if not self._carrinho or not self._pagamento:
+            return
+        responsavel = self._responsavel_atual()
+        if not responsavel:
+            messagebox.showerror("Operador obrigatório", "Informe o Operador antes de finalizar a Venda no caixa.")
+            self._entry_responsavel.focus_set()
             return
 
         total = self._total_carrinho()
         numero_venda = self._num_venda
         pagamento = self._resumo_pagamento()
-        db.registrar_venda(
+        args = (
             self._periodo_id,
             self._num_venda,
-            self._carrinho,
+            [dict(item) for item in self._carrinho],
             self._pagamento,
-            pagamento_detalhe=self._pagamento_detalhe,
-            valor_recebido=self._valor_recebido,
-            troco=self._troco,
-            responsavel=self._responsavel_atual(),
-            data=self._data_hoje,
+        )
+        kwargs = {
+            "pagamento_detalhe": self._pagamento_detalhe,
+            "valor_recebido": self._valor_recebido,
+            "troco": self._troco,
+            "responsavel": responsavel,
+            "data": self._data_hoje,
+            "pagamentos": self._pagamentos_da_venda(),
+            "chave_idempotencia": self._sale_uuid,
+        }
+        if remote_mode():
+            self._btn_finalizar.config(state="disabled")
+            self._submit_background(
+                lambda: db.registrar_venda(*args, **kwargs),
+                lambda resultado, error: self._complete_sale_registration(
+                    resultado, error, total, numero_venda, pagamento
+                ),
+            )
+            return
+        try:
+            resultado_venda = db.registrar_venda(*args, **kwargs)
+        except Exception as error:
+            self._complete_sale_registration(None, error, total, numero_venda, pagamento)
+            return
+        self._complete_sale_registration(resultado_venda, None, total, numero_venda, pagamento)
+
+    def _complete_sale_registration(self, resultado_venda, error, total, numero_venda, pagamento) -> None:
+        if error:
+            self._btn_finalizar.config(state="normal")
+            self._atualizar_totais()
+            messagebox.showerror("Venda não concluída", str(error))
+            return
+
+        self._aplicar_totais_periodo(
+            {
+                "transacoes": self._vendas_dia + 1,
+                "total": self._total_dia + total,
+                "correcoes": self._correcoes_periodo,
+            }
         )
 
-        self._vendas_dia += 1
-        self._total_dia += total
-        self._lbl_vendas_dia.config(text=str(self._vendas_dia))
-        self._lbl_total_dia.config(text=moeda(self._total_dia))
-
-        self._nova_venda()
+        self._nova_venda(consultar_servidor=not remote_mode() and not bool(resultado_venda and resultado_venda.get("offline")))
         self._atualizar_historico()
         self._atualizar_painel_estoque()
         self._mostrar_feedback_venda(
-            f"Venda #{numero_venda:03d} registrada por {moeda(total)} em {pagamento}."
+            f"Venda #{numero_venda:03d} salva offline e aguardando sincronização."
+            if resultado_venda and resultado_venda.get("offline")
+            else f"Venda #{numero_venda:03d} registrada por {moeda(total)} em {pagamento}."
         )
+        alertas = (resultado_venda or {}).get("alertas_estoque", [])
+        if alertas:
+            linhas = [
+                f"{alerta.get('codigo') or alerta.get('nome') or 'Produto'}: saldo {alerta['saldo_resultante']}"
+                for alerta in alertas
+            ]
+            messagebox.showwarning(
+                "Estoque negativo registrado",
+                "A Venda no caixa foi concluída, mas estes produtos ficaram com saldo negativo:\n\n"
+                + "\n".join(linhas),
+            )
 
-    def _nova_venda(self):
+    def _nova_venda(self, consultar_servidor: bool = True):
         """Reseta a tela para iniciar uma nova venda no mesmo periodo."""
         if self._feedback_after_id:
             self.after_cancel(self._feedback_after_id)
             self._feedback_after_id = None
-        self._num_venda = db.proximo_num_venda(self._periodo_id)
+        self._num_venda = db.proximo_num_venda(self._periodo_id) if consultar_servidor else self._num_venda + 1
+        self._sale_uuid = str(uuid.uuid4())
         self._atualizar_badge_venda()
         self._limpar_carrinho()
         self._entry_busca.focus()
@@ -1673,11 +2378,7 @@ class CaixaApp(tk.Tk):
         if not periodo or not db.vendas_do_periodo(self._periodo_id):
             return None
 
-        return relatorios_service.gerar_relatorio_periodo(
-            self._periodo_id,
-            pasta_saida,
-            responsavel=periodo["responsavel"] or self._responsavel_atual(),
-        )
+        return period_report(self._periodo_id, Path(pasta_saida) / f"Relatorio_periodo-{self._periodo_id}.xlsx")
 
     def _exportar_relatorio(self):
         """Permite ao operador escolher a pasta de exportacao manual."""
@@ -1693,7 +2394,19 @@ class CaixaApp(tk.Tk):
         messagebox.showinfo("Relatorio gerado", f"Arquivo salvo em:\n{caminho}")
 
     def _encerrar_dia(self):
-        """Fecha o periodo atual, exporta o relatorio e inicia outro periodo."""
+        """Fecha o Período da Loja atomicamente e exporta o snapshot depois."""
+        responsavel = self._responsavel_atual()
+        if not responsavel:
+            messagebox.showerror("Operador obrigatório", "Informe o Operador antes de fechar o Período da Loja.")
+            self._entry_responsavel.focus_set()
+            return
+        try:
+            sync_pending_sales()
+        except Exception:
+            pass
+        if pending_sales():
+            messagebox.showerror("Sincronização pendente", "Existem vendas offline ainda não confirmadas. Reconecte ao servidor antes de encerrar o período.")
+            return
         if self._carrinho:
             confirmar = messagebox.askyesno(
                 "Encerrar dia",
@@ -1708,12 +2421,39 @@ class CaixaApp(tk.Tk):
             messagebox.showerror("Erro", "Nao foi possivel localizar o periodo atual do caixa.")
             return
 
-        caminho = self._exportar_periodo(str(REPORTS_DIR))
-        teve_vendas = caminho is not None
+        periodo_fechado_id = self._periodo_id
+        try:
+            snapshot = db.fechar_periodo_loja(periodo_fechado_id, responsavel)
+        except Exception as error:
+            messagebox.showerror("Período não fechado", str(error))
+            return
 
-        db.encerrar_periodo(self._periodo_id)
-        self._abrir_periodo_para_data(datetime.now().strftime("%d/%m/%Y"))
+        self._periodo_id = int(snapshot["proximo_periodo_id"])
+        novo_periodo = db.obter_periodo(self._periodo_id)
+        if novo_periodo is None:
+            messagebox.showerror(
+                "Período fechado",
+                "O fechamento foi salvo, mas o novo Período da Loja não pôde ser carregado. Reinicie o PDV.",
+            )
+            return
+        self._abrir_periodo_para_data(novo_periodo["data"])
         self._mostrar_feedback_venda(f"Periodo {self._periodo_seq:02d} pronto para novas vendas.")
+
+        teve_vendas = int(snapshot.get("total_vendas_centavos", 0)) > 0
+        caminho = None
+        if teve_vendas:
+            try:
+                caminho = period_report(
+                    periodo_fechado_id,
+                    REPORTS_DIR / f"Relatorio_periodo-{periodo_fechado_id}.xlsx",
+                )
+            except Exception as error:
+                messagebox.showerror(
+                    "Período fechado; relatório pendente",
+                    "O fechamento financeiro foi salvo, mas o XLSX não foi gerado. "
+                    f"Exporte novamente pela tela de relatórios.\n\nDetalhe: {error}",
+                )
+                return
 
         if teve_vendas:
             messagebox.showinfo(
@@ -1729,6 +2469,11 @@ class CaixaApp(tk.Tk):
 
     def _importar_planilha(self):
         """Importa produtos a partir de CSV ou planilhas Excel."""
+        responsavel = self._responsavel_atual()
+        if not responsavel:
+            messagebox.showerror("Operador obrigatório", "Informe o Operador antes de importar produtos.")
+            self._entry_responsavel.focus_set()
+            return
         arquivo = filedialog.askopenfilename(
             title="Selecionar planilha de produtos",
             filetypes=[
@@ -1745,7 +2490,13 @@ class CaixaApp(tk.Tk):
             modo = confirmar_importacao(self, previa)
             if not modo:
                 return
-            resultado = importacao_service.importar(arquivo, modo)
+            resultado = importacao_service.importar(
+                arquivo,
+                modo,
+                responsavel=responsavel,
+                lote_id=str(uuid.uuid4()),
+                hash_arquivo=previa.get("sha256", ""),
+            )
             messagebox.showinfo(
                 "Importacao concluida",
                 f"{resultado['inseridos']} produtos inseridos\n"
@@ -1760,7 +2511,7 @@ class CaixaApp(tk.Tk):
 
     def _criar_backup(self):
         try:
-            caminho = backup_service.criar_backup(db.DB_PATH, BACKUPS_DIR)
+            caminho = create_backup(BACKUPS_DIR / f"loja_{datetime.now():%Y%m%d_%H%M%S}.db")
             messagebox.showinfo("Backup concluido", f"Backup criado com sucesso em:\n{caminho}")
         except Exception as erro:
             messagebox.showerror("Erro no backup", f"Nao foi possivel criar o backup.\n\n{erro}")
@@ -1790,12 +2541,12 @@ class CaixaApp(tk.Tk):
             return
 
         try:
-            anterior = backup_service.restaurar_backup(caminho, db.DB_PATH, BACKUPS_DIR)
-            db.inicializar()
+            resultado = restore_backup(caminho)
+            anterior = resultado.get("backup_anterior")
             self._abrir_periodo_para_data(datetime.now().strftime("%d/%m/%Y"))
             self._atualizar_painel_estoque()
             self._atualizar_historico()
-            detalhe = f"\n\nBackup de segurança gerado antes da restauração:\n{anterior.name}" if anterior else ""
+            detalhe = f"\n\nBackup de segurança gerado antes da restauração:\n{anterior}" if anterior else ""
             messagebox.showinfo("Restauração concluída", f"O banco de dados foi restaurado com sucesso.{detalhe}")
         except Exception as erro:
             messagebox.showerror("Erro na restauração", f"Não foi possível restaurar o backup.\n\n{erro}")
@@ -1832,10 +2583,22 @@ class CaixaApp(tk.Tk):
     def _atualizar_historico(self):
         """Recarrega a grade com as vendas e correções do período atual."""
         if hasattr(self, "_vendas_correcoes_view"):
-            self._vendas_correcoes_view.atualizar()
+            self._vendas_correcoes_view.solicitar_atualizacao()
 
     def _atualizar_painel_estoque(self):
         """Sincroniza a aba de estoque apos vendas ou importacoes."""
+        if remote_mode():
+            if hasattr(self, "_estoque_dashboard"):
+                self._submit_background(
+                    db.snapshot_dashboard_estoque,
+                    lambda snapshot, error: self._complete_stock_load(self._estoque_dashboard, snapshot, error),
+                )
+            if hasattr(self, "_estoque_panel"):
+                self._submit_background(
+                    db.snapshot_operacional_estoque,
+                    lambda snapshot, error: self._complete_stock_load(self._estoque_panel, snapshot, error),
+                )
+            return
         for atributo in (
             "_estoque_dashboard",
             "_estoque_panel",
@@ -2024,11 +2787,24 @@ class CaixaApp(tk.Tk):
         """Reposiciona os paineis quando a janela fica mais estreita."""
         if event is not None and event.widget is not self:
             return
-        compacto = self.winfo_width() < 980
-        compacto_altura = self.winfo_height() < 760
+        largura = self.winfo_width()
+        altura = self.winfo_height()
+        compacto = largura < 760
+        compacto_altura = altura < 760
         if compacto_altura != self._compacto_altura:
             self._compacto_altura = compacto_altura
             self._aplicar_compacto_altura(compacto_altura)
+
+        if compacto:
+            altura_lateral = max(220, min(300, int(altura * 0.38)))
+            self._sale_content.rowconfigure(0, minsize=altura_lateral)
+            self._right_panel.configure(width=max(300, largura), height=altura_lateral)
+        else:
+            minimo_lateral = 270 if largura < 980 else 300
+            largura_lateral = max(minimo_lateral, min(360, int(largura * 0.26)))
+            self._sale_content.columnconfigure(1, minsize=largura_lateral)
+            self._right_panel.configure(width=largura_lateral, height=1)
+            self._lbl_pgto_resumo.configure(wraplength=max(220, largura_lateral - 28))
 
         if compacto == self._layout_compacto:
             return
@@ -2038,24 +2814,18 @@ class CaixaApp(tk.Tk):
         self._right_separator.grid_forget()
         self._right_panel.grid_forget()
         if compacto:
-            self._body.columnconfigure(0, weight=1)
-            self._body.columnconfigure(1, weight=0, minsize=0)
-            self._body.rowconfigure(0, weight=1)
-            self._body.rowconfigure(1, weight=0)
-            self._body.rowconfigure(2, weight=0, minsize=260)
+            self._sale_content.columnconfigure(0, weight=1)
+            self._sale_content.columnconfigure(1, weight=0, minsize=0)
+            self._sale_content.rowconfigure(0, weight=1)
             self._left_panel.grid(row=0, column=0, sticky="nsew")
             self._right_separator.grid(row=1, column=0, sticky="ew")
-            self._right_panel.configure(width=300, height=260)
             self._right_panel.grid(row=2, column=0, sticky="ew")
         else:
-            self._body.columnconfigure(0, weight=1)
-            self._body.columnconfigure(1, weight=0, minsize=336)
-            self._body.rowconfigure(0, weight=1)
-            self._body.rowconfigure(1, weight=0)
-            self._body.rowconfigure(2, weight=0, minsize=0)
+            self._sale_content.columnconfigure(0, weight=1)
+            self._sale_content.columnconfigure(1, weight=0)
+            self._sale_content.rowconfigure(0, weight=1)
             self._left_panel.grid(row=0, column=0, sticky="nsew")
             self._right_separator.grid(row=0, column=0, sticky="nse")
-            self._right_panel.configure(width=300, height=1)
             self._right_panel.grid(row=0, column=1, sticky="nsew")
 
     def _aplicar_compacto_altura(self, compacto: bool):
@@ -2071,10 +2841,22 @@ class CaixaApp(tk.Tk):
             self._lbl_venda_num.configure(font=("Segoe UI", 8, "bold"), padx=7, pady=2)
             self._lbl_venda_num.pack_configure(pady=(4, 0))
 
-            self._card_status.configure(padx=10, pady=9)
-            self._card_status.pack_configure(pady=(0, 7))
-            self._lbl_status_fluxo.configure(font=("Segoe UI", 10, "bold"), wraplength=230)
-            self._lbl_status_fluxo.pack_configure(pady=(4, 2))
+            self._sale_pad.pack_configure(padx=10, pady=8)
+            self._search_card.configure(padx=10, pady=8)
+            self._search_card.pack_configure(pady=(0, 6))
+            self._search_panel.configure(pady=7)
+            self._sale_dash.pack_configure(pady=(5, 0))
+            self._shortcut_bar.configure(pady=2)
+            self._shortcut_bar.pack_configure(pady=(4, 0))
+            for kpi in (self._kpi_hoje, self._kpi_vendas, self._kpi_correcoes):
+                kpi.configure(padx=8, pady=5)
+                kpi.value_label.configure(font=("Segoe UI", 12, "bold"))
+
+            self._card_status.configure(padx=9, pady=7)
+            self._card_status.pack_configure(pady=(0, 6))
+            self._lbl_status_title.configure(font=("Segoe UI", 10, "bold"))
+            self._lbl_status_fluxo.configure(font=("Segoe UI", 8), wraplength=250)
+            self._lbl_status_fluxo.pack_configure(pady=(1, 3))
             self._lbl_status_aux.configure(font=("Segoe UI", 8), wraplength=230)
             self._lbl_total.configure(font=("Segoe UI", 17, "bold"))
             self._lbl_forma_pgto.pack_configure(pady=(0, 3))
@@ -2094,10 +2876,22 @@ class CaixaApp(tk.Tk):
             self._lbl_venda_num.configure(font=("Segoe UI", 10, "bold"), padx=10, pady=5)
             self._lbl_venda_num.pack_configure(pady=(8, 0))
 
-            self._card_status.configure(padx=16, pady=16)
-            self._card_status.pack_configure(pady=(0, 12))
-            self._lbl_status_fluxo.configure(font=("Segoe UI", 13, "bold"), wraplength=230)
-            self._lbl_status_fluxo.pack_configure(pady=(8, 4))
+            self._sale_pad.pack_configure(padx=18, pady=16)
+            self._search_card.configure(padx=16, pady=16)
+            self._search_card.pack_configure(pady=(0, 12))
+            self._search_panel.configure(pady=16)
+            self._sale_dash.pack_configure(pady=(12, 0))
+            self._shortcut_bar.configure(pady=4)
+            self._shortcut_bar.pack_configure(pady=(8, 0))
+            for kpi in (self._kpi_hoje, self._kpi_vendas, self._kpi_correcoes):
+                kpi.configure(padx=14, pady=11)
+                kpi.value_label.configure(font=FONTES["numero_card"])
+
+            self._card_status.configure(padx=10, pady=9)
+            self._card_status.pack_configure(pady=(0, 7))
+            self._lbl_status_title.configure(font=("Segoe UI", 11, "bold"))
+            self._lbl_status_fluxo.configure(font=("Segoe UI", 9), wraplength=280)
+            self._lbl_status_fluxo.pack_configure(pady=(1, 5))
             self._lbl_status_aux.configure(font=("Segoe UI", 9), wraplength=230)
             self._lbl_total.configure(font=("Segoe UI", 20, "bold"))
             self._lbl_forma_pgto.pack_configure(pady=(0, 6))
@@ -2111,10 +2905,10 @@ class CaixaApp(tk.Tk):
 
     def _atualizar_badge_venda(self):
         """Atualiza o selo com numero do periodo e da venda atual."""
-        self._lbl_venda_num.config(text=f"Periodo {self._periodo_seq:02d}  |  Venda #{self._num_venda:03d}")
+        self._lbl_venda_num.config(text=f"Período {self._periodo_seq:02d}  |  Venda #{self._num_venda:03d}")
 
     def _atualizar_relogio(self):
-        """Atualiza o horario visivel e troca o periodo quando vira o dia."""
+        """Atualiza horário e fecha o Período da Loja ao virar a data."""
         agora = datetime.now()
         self._lbl_relogio.config(text=agora.strftime("%H:%M"))
         nova_data = agora.strftime("%d/%m/%Y")
@@ -2129,17 +2923,23 @@ class CaixaApp(tk.Tk):
 
     def destroy(self) -> None:
         """Cancela callbacks pendentes antes de destruir a janela."""
+        self._closed = True
         for after_id in (
             self._feedback_after_id,
             self._focus_after_id,
             self._manter_foco_after_id,
             self._clock_after_id,
+            self._background_after_id,
+            self._search_debounce_id,
+            self._sync_after_id,
         ):
             if after_id:
                 try:
                     self.after_cancel(after_id)
                 except tk.TclError:
                     pass
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        close_remote_client()
         super().destroy()
 
     def _add_placeholder(self, entry: tk.Entry, text: str):

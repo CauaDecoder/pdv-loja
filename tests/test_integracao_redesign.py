@@ -21,19 +21,19 @@ def test_correcao_completa_recompoe_estoque_e_separa_financeiro():
                 """
                 INSERT INTO periodos_caixa
                     (data, sequencia, aberto_em, responsavel)
-                VALUES ('22/07/2026', 1, '2026-07-22T08:00:00', 'Maria')
+                VALUES ('2026-07-22', 1, '2026-07-22T08:00:00', 'Maria')
                 """
             ).lastrowid
             produto_a = conn.execute(
                 """
-                INSERT INTO produtos (codigo, nome, preco, estoque)
-                VALUES ('A', 'Produto A', 10, 10)
+                INSERT INTO produtos (codigo, nome, preco_centavos, estoque)
+                VALUES ('A', 'Produto A', 1000, 10)
                 """
             ).lastrowid
             produto_b = conn.execute(
                 """
-                INSERT INTO produtos (codigo, nome, preco, estoque)
-                VALUES ('B', 'Produto B', 5, 5)
+                INSERT INTO produtos (codigo, nome, preco_centavos, estoque)
+                VALUES ('B', 'Produto B', 500, 5)
                 """
             ).lastrowid
 
@@ -59,6 +59,7 @@ def test_correcao_completa_recompoe_estoque_e_separa_financeiro():
             "Pix",
             responsavel="Maria",
             data="22/07/2026",
+            chave_idempotencia="integracao-venda-1",
         )
         database.registrar_venda(
             periodo_id,
@@ -72,9 +73,12 @@ def test_correcao_completa_recompoe_estoque_e_separa_financeiro():
                     "preco_unit": 7,
                 }
             ],
-            "Dinheiro",
-            responsavel="Maria",
+                "Dinheiro",
+                valor_recebido=7,
+                troco=0,
+                responsavel="Maria",
             data="22/07/2026",
+            chave_idempotencia="integracao-venda-2",
         )
 
         detalhe = vendas_service.obter_detalhe_venda(periodo_id, 1)

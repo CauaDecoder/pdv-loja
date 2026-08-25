@@ -4,9 +4,11 @@ import unittest
 import tkinter as tk
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from app import database
 from app.services import vendas_service
+from app.ui import relatorios_view
 from app.ui.relatorios_view import RelatoriosView
 
 
@@ -28,8 +30,8 @@ class RelatoriosUITest(unittest.TestCase):
             ).lastrowid
             prod_id = conn.execute(
                 """
-                INSERT INTO produtos (codigo, nome, preco, estoque)
-                VALUES ('P1', 'Produto Teste', 50.0, 10)
+                INSERT INTO produtos (codigo, nome, preco_centavos, estoque)
+                VALUES ('P1', 'Produto Teste', 5000, 10)
                 """
             ).lastrowid
             self.periodo_id = periodo_id
@@ -42,6 +44,7 @@ class RelatoriosUITest(unittest.TestCase):
             "Pix",
             responsavel="Maria Operadora",
             data="2026-07-22",
+            chave_idempotencia="relatorio-ui-venda-1",
         )
 
         # Venda 2: Cancelada (Dinheiro R$ 50)
@@ -50,8 +53,11 @@ class RelatoriosUITest(unittest.TestCase):
             2,
             [{"produto_id": prod_id, "codigo": "P1", "nome": "Produto Teste", "quantidade": 1, "preco_unit": 50.0}],
             "Dinheiro",
+            valor_recebido=50,
+            troco=0,
             responsavel="Maria Operadora",
             data="2026-07-22",
+            chave_idempotencia="relatorio-ui-venda-2",
         )
         vendas_service.cancelar_venda(self.periodo_id, 2, responsavel="Maria Operadora", observacao="Teste cancelamento")
 
@@ -85,6 +91,43 @@ class RelatoriosUITest(unittest.TestCase):
             self.assertEqual(len(canceladas), 1)
             self.assertEqual(canceladas[0]["sale_number"], 2)
             self.assertEqual(canceladas[0]["status"], "cancelled")
+        finally:
+            root.destroy()
+
+    def test_erro_de_carregamento_nao_substitui_fechamento_por_zeros(self):
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except tk.TclError:
+            self.skipTest("Ambiente GUI Tkinter nao disponivel")
+            return
+
+        try:
+            view = RelatoriosView(
+                root,
+                periodo_id_provider=lambda: self.periodo_id,
+                autoload=False,
+            )
+            fechamento_anterior = {
+                "period_id": self.periodo_id,
+                "financial_movement": {"transactions": 3, "total": 125.0},
+                "cancelled_sales": [],
+            }
+            view._dados_fechamento = fechamento_anterior
+
+            with (
+                patch.object(
+                    relatorios_view.relatorios_service,
+                    "obter_fechamento_financeiro",
+                    side_effect=RuntimeError("banco indisponível"),
+                ),
+                patch("app.ui.relatorios_view.messagebox.showerror") as mostrar_erro,
+            ):
+                view.atualizar()
+
+            self.assertIs(view._dados_fechamento, fechamento_anterior)
+            mostrar_erro.assert_called_once()
+            self.assertIn("banco indisponível", mostrar_erro.call_args.args[1])
         finally:
             root.destroy()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tkinter as tk
+import uuid
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
@@ -32,6 +33,8 @@ class ImportacaoGuidedView(tk.Frame):
         self._modo_rotulo: str = list(importacao_service.MODOS.keys())[0]
         self._previa_dados: dict | None = None
         self._resultado_importacao: dict | None = None
+        self._lote_id: str | None = None
+        self._operador_var: tk.StringVar | None = None
 
         self._build_ui()
 
@@ -211,7 +214,7 @@ class ImportacaoGuidedView(tk.Frame):
             ),
             "Inventario inicial": (
                 "Inventário Inicial",
-                "Substitui e define a quantidade de estoque inicial diretamente a partir dos valores lidos da planilha.",
+                "Define o saldo dos produtos novos pelo Disponível. Exige banco completamente vazio.",
             ),
         }
 
@@ -293,7 +296,7 @@ class ImportacaoGuidedView(tk.Frame):
             ("Novos", str(previa.get("produtos_inseridos_previstos", 0))),
             ("Atualizados", str(previa.get("produtos_atualizados_previstos", 0))),
             ("Duplicados", str(previa.get("produtos_duplicados", 0))),
-            ("Diferenca custo", _fmt_moeda(previa.get("diferenca_custo"))),
+            ("Fora da planilha", str(previa.get("produtos_ativos_fora_da_planilha", 0))),
         ]
 
         for col_idx, (label, val) in enumerate(metricas):
@@ -304,12 +307,42 @@ class ImportacaoGuidedView(tk.Frame):
 
         # Alertas de Risco Financeiro e Inconsistências
         total_alterados = previa.get("produtos_inseridos_previstos", 0) + previa.get("produtos_atualizados_previstos", 0)
+        riscos = self._riscos_bloqueantes(previa)
+        if (
+            self._modo_rotulo == "Inventario inicial"
+            and not previa.get("pode_inventario_inicial", True)
+        ):
+            riscos.append("Inventário Inicial exige banco vazio")
+        fora = previa.get("produtos_ativos_fora_da_planilha", 0)
+        mensagem = (
+            "Importação bloqueada: " + "; ".join(riscos)
+            if riscos
+            else f"{total_alterados} cadastros serão processados. "
+            f"{fora} produtos ausentes serão preservados e sinalizados."
+        )
+        negativos = previa.get("produtos_com_estoque_negativo", 0)
+        if negativos:
+            mensagem += (
+                f" {negativos} produto(s) ficarão com estoque negativo; "
+                "o saldo será permitido, alertado e auditado."
+            )
+        if previa.get("alerta_diferenca_custo"):
+            mensagem += (
+                " Diferença entre custo calculado e planilha: "
+                f"{_fmt_moeda(previa.get('diferenca_custo'))}."
+            )
+        arredondados = previa.get("valores_monetarios_arredondados", 0)
+        if arredondados:
+            mensagem += (
+                f" {arredondados} valor(es) monetário(s) serão arredondados "
+                "para centavos."
+            )
 
         alert_box = tk.Frame(card, bg=TEMA_ATUAL["warning_soft"], padx=12, pady=12)
         alert_box.pack(fill="x", pady=(14, 12))
         tk.Label(
             alert_box,
-            text=f"{total_alterados} produtos terao estoque alterado. Confirme somente depois da conferencia.",
+            text=mensagem,
             bg=TEMA_ATUAL["warning_soft"],
             fg=TEMA_ATUAL["warning"],
             font=FONTES["corpo"],
@@ -332,6 +365,7 @@ class ImportacaoGuidedView(tk.Frame):
             text="Avançar para Confirmação ➔",
             command=lambda: self._ir_para_etapa(4),
             variant="primary",
+            state="disabled" if riscos else "normal",
         ).pack(side="right")
 
     def _render_etapa_4_confirmacao(self):
@@ -350,6 +384,25 @@ class ImportacaoGuidedView(tk.Frame):
 
         box_resumo = tk.Frame(card, bg=TEMA_ATUAL["surface_2"], padx=18, pady=16)
         box_resumo.pack(fill="x", pady=(0, 18))
+
+        self._operador_var = tk.StringVar()
+        operador = tk.Frame(card, bg=TEMA_ATUAL["surface"])
+        operador.pack(fill="x", pady=(0, 18))
+        tk.Label(
+            operador,
+            text="Operador Responsável",
+            bg=TEMA_ATUAL["surface"],
+            fg=TEMA_ATUAL["texto"],
+            font=FONTES["corpo_bold"],
+        ).pack(anchor="w", pady=(0, 4))
+        tk.Entry(
+            operador,
+            textvariable=self._operador_var,
+            bg=TEMA_ATUAL["surface_2"],
+            fg=TEMA_ATUAL["texto"],
+            relief="flat",
+            font=FONTES["corpo"],
+        ).pack(fill="x", ipady=7)
 
         tk.Label(
             box_resumo,
@@ -427,7 +480,8 @@ class ImportacaoGuidedView(tk.Frame):
                  f"• Produtos atualizados: {res.get('atualizados', 0)}\n"
                  f"• Ajustes de estoque registrados: {res.get('ajustados', 0)}\n"
                  f"• Linhas ignoradas: {res.get('ignorados', 0)}\n"
-                 f"• Coluna de estoque utilizada: {res.get('coluna_estoque') or 'Nenhuma (preservado)'}",
+                 f"• Coluna de estoque utilizada: {res.get('coluna_estoque') or 'Nenhuma (preservado)'}\n"
+                 f"• Lote de importação: {res.get('lote_id', self._lote_id or '')}",
             bg=TEMA_ATUAL["primary_soft"],
             fg=TEMA_ATUAL["primary"],
             font=FONTES["subtitulo"],
@@ -467,6 +521,7 @@ class ImportacaoGuidedView(tk.Frame):
             self._caminho_arquivo = arquivo
             self._previa_dados = None
             self._resultado_importacao = None
+            self._lote_id = None
             self._build_ui()
 
     def _ir_para_etapa(self, etapa: int):
@@ -482,6 +537,7 @@ class ImportacaoGuidedView(tk.Frame):
             return
         try:
             self._previa_dados = importacao_service.previsualizar(self._caminho_arquivo)
+            self._lote_id = None
             self._ir_para_etapa(3)
         except Exception as erro:
             messagebox.showerror("Erro ao analisar arquivo", f"Não foi possível ler a planilha selecionada.\n\n{erro}")
@@ -490,8 +546,23 @@ class ImportacaoGuidedView(tk.Frame):
         if not self._caminho_arquivo:
             return
         modo_backend = importacao_service.MODOS.get(self._modo_rotulo)
+        operador = self._operador_var.get().strip() if self._operador_var else ""
+        if not operador:
+            messagebox.showerror(
+                "Operador obrigatório",
+                "Informe o Operador responsável pela importação.",
+            )
+            return
+        previa = self._previa_dados or {}
+        self._lote_id = self._lote_id or str(uuid.uuid4())
         try:
-            resultado = importacao_service.importar(self._caminho_arquivo, modo_backend)
+            resultado = importacao_service.importar(
+                self._caminho_arquivo,
+                modo_backend,
+                responsavel=operador,
+                lote_id=self._lote_id,
+                hash_arquivo=previa.get("sha256", ""),
+            )
             self._resultado_importacao = resultado
             self._build_ui()
             if self._on_import_complete:
@@ -504,7 +575,21 @@ class ImportacaoGuidedView(tk.Frame):
         self._caminho_arquivo = None
         self._previa_dados = None
         self._resultado_importacao = None
+        self._lote_id = None
+        self._operador_var = None
         self._build_ui()
+
+    @staticmethod
+    def _riscos_bloqueantes(previa: dict) -> list[str]:
+        campos = (
+            ("produtos_duplicados", "SKU duplicado"),
+            ("codigos_barras_duplicados", "código de barras duplicado"),
+            ("produtos_sem_sku", "produto sem SKU"),
+            ("produtos_sem_nome", "produto sem nome"),
+            ("produtos_sem_preco", "produto sem preço"),
+            ("produtos_com_estoque_invalido", "estoque inválido"),
+        )
+        return [f"{previa.get(campo, 0)} {rotulo}(s)" for campo, rotulo in campos if previa.get(campo, 0)]
 
 
 def _fmt_moeda(val) -> str:

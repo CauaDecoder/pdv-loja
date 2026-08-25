@@ -3,8 +3,21 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+import pytest
 from app import database
 from app.services import vendas_service
+
+
+@pytest.fixture(autouse=True)
+def _uuid_idempotente_em_vendas(monkeypatch):
+    registrar = database.registrar_venda
+
+    def registrar_com_uuid(*args, **kwargs):
+        kwargs.setdefault("chave_idempotencia", str(uuid.uuid4()))
+        kwargs.setdefault("responsavel", "Operador")
+        return registrar(*args, **kwargs)
+
+    monkeypatch.setattr(database, "registrar_venda", registrar_com_uuid)
 
 
 def _usar_banco_temporario():
@@ -24,24 +37,17 @@ def _limpar_banco_temporario(temp: Path, original: Path):
 
 
 def _criar_periodo(data="01/01/2026") -> int:
-    with database.get_conn() as conn:
-        return conn.execute(
-            """
-            INSERT INTO periodos_caixa (data, sequencia, aberto_em, responsavel)
-            VALUES (?, 1, '2026-01-01T08:00:00', 'Operador')
-            """,
-            (data,),
-        ).lastrowid
+    return int(database.obter_ou_criar_periodo_aberto(data)["id"])
 
 
 def _criar_produto(codigo: str, nome: str, preco: float, estoque: int = 10) -> int:
     with database.get_conn() as conn:
         return conn.execute(
             """
-            INSERT INTO produtos (codigo, nome, preco, estoque)
+            INSERT INTO produtos (codigo, nome, preco_centavos, estoque)
             VALUES (?, ?, ?, ?)
             """,
-            (codigo, nome, preco, estoque),
+            (codigo, nome, round(preco * 100), estoque),
         ).lastrowid
 
 
@@ -96,6 +102,40 @@ def test_lista_vendas_correcoes_no_contrato_da_ui():
         _limpar_banco_temporario(temp, original)
 
 
+def test_lista_vendas_correcoes_filtra_intervalo_entre_meses_com_data_real():
+    temp, original = _usar_banco_temporario()
+    try:
+        produto_id = _criar_produto("A", "Produto A", 10, estoque=20)
+        periodo_julho = _criar_periodo("31/07/2026")
+        item = [
+            {
+                "produto_id": produto_id,
+                "codigo": "A",
+                "nome": "Produto A",
+                "quantidade": 1,
+                "preco_unit": 10,
+            }
+        ]
+        database.registrar_venda(
+            periodo_julho, 1, item, "Pix", data="31/07/2026"
+        )
+        fechamento = database.fechar_periodo_loja(
+            periodo_julho, "Operador", "2026-08-01T08:00:00"
+        )
+        periodo_agosto = fechamento["proximo_periodo_id"]
+        database.registrar_venda(
+            periodo_agosto, 1, item, "Pix", data="01/08/2026"
+        )
+
+        vendas = vendas_service.listar_vendas_correcoes(
+            {"data_inicio": "01/08/2026", "data_fim": "31/08/2026"}
+        )
+
+        assert [venda["sold_at"]["date"] for venda in vendas] == ["01/08/2026"]
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
 def test_detalhe_venda_expoe_itens_pagamento_status_e_historico():
     temp, original = _usar_banco_temporario()
     try:
@@ -121,8 +161,8 @@ def test_detalhe_venda_expoe_itens_pagamento_status_e_historico():
         with database.get_conn() as conn:
             conn.execute(
                 """
-                UPDATE vendas
-                SET status = 'corrected'
+                UPDATE vendas_cabecalho
+                SET status = 'Corrigida'
                 WHERE periodo_id = ? AND num_venda = ?
                 """,
                 (periodo_id, 1),
@@ -143,12 +183,11 @@ def test_detalhe_venda_expoe_itens_pagamento_status_e_historico():
         assert detalhe["identity"] == {"sale_number": 1, "period_id": periodo_id}
         assert detalhe["status"] == "corrected"
         assert detalhe["responsible"] == "Joao"
-        assert detalhe["payment"] == {
-            "method": "Credito",
-            "detail": "Visa 2x",
-            "received": None,
-            "change": None,
-        }
+        assert detalhe["payment"]["method"] == "Credito"
+        assert detalhe["payment"]["detail"] == "Visa 2x"
+        assert detalhe["payment"]["received"] is None
+        assert detalhe["payment"]["change"] is None
+        assert len(detalhe["payment"]["installments"]) == 1
         assert detalhe["items"] == [
             {
                 "line_id": detalhe["items"][0]["line_id"],
@@ -195,14 +234,16 @@ def test_venda_cancelada_tem_status_explicito_e_sem_acoes_disponiveis():
                 }
             ],
             "Dinheiro",
+            valor_recebido=12,
+            troco=0,
             responsavel="Maria",
             data="01/01/2026",
         )
         with database.get_conn() as conn:
             conn.execute(
                 """
-                UPDATE vendas
-                SET status = 'cancelled'
+                UPDATE vendas_cabecalho
+                SET status = 'Cancelada'
                 WHERE periodo_id = ? AND num_venda = ?
                 """,
                 (periodo_id, 1),
@@ -271,7 +312,7 @@ def test_registrar_correcao_persiste_status_e_auditoria_estruturada():
                 (periodo_id,),
             ).fetchall()
 
-        assert [row["status"] for row in statuses] == ["corrected"]
+        assert [row["status"] for row in statuses] == ["Corrigida"]
         assert detalhe["status"] == "corrected"
         assert detalhe["correction_history"] == [
             {
@@ -306,6 +347,8 @@ def test_registrar_cancelamento_marca_status_sem_apagar_venda():
                 }
             ],
             "Dinheiro",
+            valor_recebido=12,
+            troco=0,
             responsavel="Maria",
             data="01/01/2026",
         )
@@ -384,13 +427,13 @@ def test_falha_na_auditoria_desfaz_atualizacao_de_status():
                 "SELECT COUNT(*) FROM vendas_correcoes"
             ).fetchone()[0]
 
-        assert [row["status"] for row in statuses] == ["valid"]
+        assert [row["status"] for row in statuses] == ["Ativa"]
         assert total_historico == 0
     finally:
         _limpar_banco_temporario(temp, original)
 
 
-def test_migracao_preserva_venda_existente_e_completa_tabela_de_historico():
+def test_inicializacao_v2_repetida_preserva_venda_e_schema_canonico():
     temp, original = _usar_banco_temporario()
     try:
         periodo_id = _criar_periodo()
@@ -410,18 +453,6 @@ def test_migracao_preserva_venda_existente_e_completa_tabela_de_historico():
             "Pix",
             data="01/01/2026",
         )
-        with database.get_conn() as conn:
-            conn.execute("ALTER TABLE vendas DROP COLUMN status")
-            conn.execute("DROP TABLE vendas_correcoes")
-            conn.execute(
-                """
-                CREATE TABLE vendas_correcoes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    acao TEXT
-                )
-                """
-            )
-
         database.inicializar()
 
         with database.get_conn() as conn:
@@ -440,7 +471,7 @@ def test_migracao_preserva_venda_existente_e_completa_tabela_de_historico():
                 ).fetchall()
             }
 
-        assert dict(venda) == {"nome": "Produto A", "status": "valid"}
+        assert dict(venda) == {"nome": "Produto A", "status": "Ativa"}
         assert {
             "periodo_id",
             "num_venda",
@@ -513,7 +544,9 @@ def test_cancelar_venda_preserva_historico_devolve_estoque_e_exclui_financeiro()
         assert detalhe["available_actions"] == []
         assert detalhe["correction_history"][-1]["action"] == "cancel_sale"
         assert detalhe["correction_history"][-1]["responsible"] == "Ana"
-        assert detalhe["correction_history"][-1]["before"] == {"status": "valid"}
+        antes = detalhe["correction_history"][-1]["before"]
+        assert antes["status"] == "valid"
+        assert antes["payment"]["method"] == "Pix"
         assert detalhe["correction_history"][-1]["after"] == {
             "status": "cancelled",
             "stock_returned": [
@@ -523,7 +556,7 @@ def test_cancelar_venda_preserva_historico_devolve_estoque_e_exclui_financeiro()
         }
         assert detalhe["correction_history"][-1]["note"] == "Venda registrada em duplicidade"
         assert estoques == {"A": 10, "B": 7}
-        assert [row["status"] for row in linhas_venda] == ["cancelled", "cancelled"]
+        assert [row["status"] for row in linhas_venda] == ["Cancelada", "Cancelada"]
         assert {
             (row["produto_id"], row["quantidade"], row["referencia"], row["origem"])
             for row in cancelamentos
@@ -531,7 +564,11 @@ def test_cancelar_venda_preserva_historico_devolve_estoque_e_exclui_financeiro()
             (produto_a, 2, f"CANCELAMENTO:{periodo_id}:1:{produto_a}", "CORRECAO_POS_VENDA"),
             (produto_b, 1, f"CANCELAMENTO:{periodo_id}:1:{produto_b}", "CORRECAO_POS_VENDA"),
         }
-        assert database.totais_periodo(periodo_id) == {"transacoes": 0, "total": 0.0}
+        assert database.totais_periodo(periodo_id) == {
+            "transacoes": 0,
+            "total": 0.0,
+            "correcoes": 1,
+        }
         assert database.resumo_do_periodo(periodo_id) == {}
     finally:
         _limpar_banco_temporario(temp, original)
@@ -638,7 +675,7 @@ def test_falha_na_auditoria_desfaz_cancelamento_e_devolucao_de_estoque():
                 "SELECT COUNT(*) FROM movimentacoes_estoque WHERE tipo = 'CANCELAMENTO'"
             ).fetchone()[0]
 
-        assert venda["status"] == "valid"
+        assert venda["status"] == "Ativa"
         assert estoque == 8
         assert cancelamentos == 0
     finally:
@@ -678,6 +715,7 @@ def test_cancelar_venda_legada_sem_produto_vinculado_preserva_compatibilidade():
         assert database.totais_periodo(periodo_id) == {
             "transacoes": 0,
             "total": 0.0,
+            "correcoes": 1,
         }
     finally:
         _limpar_banco_temporario(temp, original)
@@ -716,23 +754,21 @@ def test_alterar_pagamento_preserva_responsavel_original_e_registra_auditoria():
 
         assert detalhe["status"] == "corrected"
         assert detalhe["responsible"] == "Maria"
-        assert detalhe["payment"] == {
-            "method": "Credito",
-            "detail": "Visa | 2x",
-            "received": None,
-            "change": None,
-        }
+        assert detalhe["payment"]["method"] == "Credito"
+        assert detalhe["payment"]["detail"] == "Visa | 2x"
+        assert detalhe["payment"]["received"] is None
+        assert detalhe["payment"]["change"] is None
+        assert len(detalhe["payment"]["installments"]) == 1
         assert len(detalhe["correction_history"]) == 1
         correcao = detalhe["correction_history"][0]
         assert correcao["action"] == "alter_payment"
         assert correcao["responsible"] == "Ana"
         assert correcao["created_at"]
-        assert correcao["before"] == {
-            "method": "Pix",
-            "detail": "",
-            "received": None,
-            "change": None,
-        }
+        assert correcao["before"]["method"] == "Pix"
+        assert correcao["before"]["detail"] == ""
+        assert correcao["before"]["received"] is None
+        assert correcao["before"]["change"] is None
+        assert len(correcao["before"]["installments"]) == 1
         assert correcao["after"] == detalhe["payment"]
         assert correcao["note"] == "Forma registrada incorretamente"
     finally:
@@ -781,7 +817,7 @@ def test_alterar_pagamento_atualiza_todas_as_linhas_e_totais_por_forma():
 
         linhas = database.vendas_do_periodo(periodo_id)
         assert {linha["pagamento"] for linha in linhas} == {"Dinheiro"}
-        assert {linha["status"] for linha in linhas} == {"corrected"}
+        assert {linha["status"] for linha in linhas} == {"Corrigida"}
         assert database.resumo_do_periodo(periodo_id) == {
             "Dinheiro": {
                 "pagamento": "Dinheiro",
@@ -789,6 +825,253 @@ def test_alterar_pagamento_atualiza_todas_as_linhas_e_totais_por_forma():
                 "total": 29.0,
             }
         }
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
+def test_alterar_pagamento_para_venda_mista_persiste_parcelas_e_auditoria():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_id = _criar_produto("A", "Produto A", 20)
+        with database.get_conn() as conn:
+            destinos = {
+                row["nome"]: int(row["id"])
+                for row in conn.execute(
+                    "SELECT id, nome FROM destinos_financeiros"
+                ).fetchall()
+            }
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_id,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 1,
+                    "preco_unit": 20,
+                }
+            ],
+            "Pix",
+            responsavel="Maria",
+            data="01/01/2026",
+        )
+
+        detalhe = vendas_service.alterar_pagamento_venda(
+            periodo_id,
+            1,
+            "Mais de uma forma",
+            pagamentos=[
+                {
+                    "forma": "Pix",
+                    "destino_id": destinos["Conta Pix"],
+                    "valor_centavos": 1200,
+                },
+                {
+                    "forma": "Dinheiro",
+                    "destino_id": destinos["Caixa fisico"],
+                    "valor_centavos": 800,
+                    "valor_recebido_centavos": 1000,
+                    "troco_centavos": 200,
+                },
+            ],
+            responsavel="Ana",
+            observacao="Pagamento dividido após conferência",
+        )
+
+        assert detalhe["payment"] == {
+            "method": "Mais de uma forma",
+            "detail": "Pix + Dinheiro",
+            "received": 10.0,
+            "change": 2.0,
+            "installments": [
+                {
+                    "method": "Pix",
+                    "destination_id": destinos["Conta Pix"],
+                    "destination": "Conta Pix",
+                    "value_centavos": 1200,
+                    "detail": "",
+                    "received_centavos": None,
+                    "change_centavos": None,
+                },
+                {
+                    "method": "Dinheiro",
+                    "destination_id": destinos["Caixa fisico"],
+                    "destination": "Caixa fisico",
+                    "value_centavos": 800,
+                    "detail": "",
+                    "received_centavos": 1000,
+                    "change_centavos": 200,
+                },
+            ],
+        }
+        assert detalhe["correction_history"][-1]["after"] == detalhe["payment"]
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
+def test_alterar_item_de_venda_mista_recebe_novas_parcelas_na_mesma_transacao():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_id = _criar_produto("A", "Produto A", 10, estoque=10)
+        with database.get_conn() as conn:
+            destinos = {
+                row["nome"]: int(row["id"])
+                for row in conn.execute(
+                    "SELECT id, nome FROM destinos_financeiros"
+                ).fetchall()
+            }
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [{
+                "produto_id": produto_id,
+                "codigo": "A",
+                "nome": "Produto A",
+                "quantidade": 2,
+                "preco_unit": 10,
+            }],
+            "Mais de uma forma",
+            pagamentos=[
+                {
+                    "forma": "Pix",
+                    "destino_id": destinos["Conta Pix"],
+                    "valor_centavos": 1200,
+                },
+                {
+                    "forma": "Dinheiro",
+                    "destino_id": destinos["Caixa fisico"],
+                    "valor_centavos": 800,
+                    "valor_recebido_centavos": 1000,
+                    "troco_centavos": 200,
+                },
+            ],
+            responsavel="Maria",
+        )
+        detalhe_antes = vendas_service.obter_detalhe_venda(periodo_id, 1)
+        line_id = detalhe_antes["items"][0]["line_id"]
+
+        detalhe = vendas_service.alterar_quantidade_item_venda(
+            periodo_id,
+            1,
+            line_id,
+            1,
+            pagamentos=[
+                {
+                    "forma": "Pix",
+                    "destino_id": destinos["Conta Pix"],
+                    "valor_centavos": 600,
+                },
+                {
+                    "forma": "Dinheiro",
+                    "destino_id": destinos["Caixa fisico"],
+                    "valor_centavos": 400,
+                    "valor_recebido_centavos": 500,
+                    "troco_centavos": 100,
+                },
+            ],
+            responsavel="Ana",
+        )
+
+        assert detalhe["totals"]["total"] == 10
+        assert [p["value_centavos"] for p in detalhe["payment"]["installments"]] == [600, 400]
+        assert detalhe["correction_history"][-1]["before"]["payment"]["method"] == "Mais de uma forma"
+        assert detalhe["correction_history"][-1]["after"]["payment"] == detalhe["payment"]
+        with database.get_conn() as conn:
+            assert conn.execute(
+                "SELECT estoque FROM produtos WHERE id = ?", (produto_id,)
+            ).fetchone()[0] == 9
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
+def test_alterar_pagamento_rejeita_recebido_e_troco_inconciliaveis():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_id = _criar_produto("A", "Produto A", 10)
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_id,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 1,
+                    "preco_unit": 10,
+                }
+            ],
+            "Pix",
+            responsavel="Maria",
+        )
+
+        try:
+            vendas_service.alterar_pagamento_venda(
+                periodo_id,
+                1,
+                "Dinheiro",
+                valor_recebido=10,
+                troco=1,
+                responsavel="Ana",
+            )
+            assert False, "Pagamento em dinheiro inconsistente deveria ser rejeitado."
+        except ValueError as exc:
+            assert str(exc) == (
+                "Valor recebido menos troco deve ser igual ao valor em Dinheiro."
+            )
+
+        detalhe = vendas_service.obter_detalhe_venda(periodo_id, 1)
+        assert detalhe["payment"]["method"] == "Pix"
+        assert detalhe["correction_history"] == []
+    finally:
+        _limpar_banco_temporario(temp, original)
+
+
+def test_alterar_pagamento_rejeita_destino_incompativel_com_forma():
+    temp, original = _usar_banco_temporario()
+    try:
+        periodo_id = _criar_periodo()
+        produto_id = _criar_produto("A", "Produto A", 10)
+        with database.get_conn() as conn:
+            conta_pix = int(
+                conn.execute(
+                    "SELECT id FROM destinos_financeiros WHERE nome = 'Conta Pix'"
+                ).fetchone()[0]
+            )
+        database.registrar_venda(
+            periodo_id,
+            1,
+            [
+                {
+                    "produto_id": produto_id,
+                    "codigo": "A",
+                    "nome": "Produto A",
+                    "quantidade": 1,
+                    "preco_unit": 10,
+                }
+            ],
+            "Pix",
+            responsavel="Maria",
+        )
+
+        try:
+            vendas_service.alterar_pagamento_venda(
+                periodo_id,
+                1,
+                "Dinheiro",
+                destino_id=conta_pix,
+                valor_recebido=10,
+                troco=0,
+                responsavel="Ana",
+            )
+            assert False, "Destino incompatível deveria ser rejeitado."
+        except ValueError as exc:
+            assert str(exc) == (
+                "Destino financeiro ativo e compatível com Dinheiro não encontrado."
+            )
     finally:
         _limpar_banco_temporario(temp, original)
 
@@ -816,7 +1099,8 @@ def test_alterar_pagamento_rejeita_venda_inexistente_ou_cancelada():
         )
         with database.get_conn() as conn:
             conn.execute(
-                "UPDATE vendas SET status = 'cancelled' WHERE periodo_id = ? AND num_venda = 1",
+                "UPDATE vendas_cabecalho SET status = 'Cancelada' "
+                "WHERE periodo_id = ? AND num_venda = 1",
                 (periodo_id,),
             )
 
@@ -1098,7 +1382,7 @@ def test_falha_na_auditoria_desfaz_correcao_de_item_e_ajuste_de_estoque():
                 """
             ).fetchone()[0]
 
-        assert dict(venda) == {"quantidade": 2, "subtotal": 24, "status": "valid"}
+        assert dict(venda) == {"quantidade": 2, "subtotal": 24, "status": "Ativa"}
         assert estoque == 8
         assert ajustes == 0
     finally:

@@ -5,15 +5,15 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from app import database as db
+from app.runtime import database as db
 from app.estoque import calculos
 from app.estoque import relatorio_estoque
+from app.services import estoque_service
 from app.ui.components import (
     BaseModal,
     Card,
     EmptyState,
     LabeledField,
-    PageHeader,
     SearchInput,
     SectionHeader,
     StatusBadge,
@@ -26,10 +26,12 @@ from app.ui.theme import FONTES, ESPACOS, moeda, obter_tema_atual
 
 
 class PainelEstoque(tk.Frame):
-    KPI_MIN_CARD_WIDTH = 132
+    KPI_MIN_CARD_WIDTH = 100
     KPI_WIDE_MIN_WIDTH = 8 * KPI_MIN_CARD_WIDTH + 2 * ESPACOS["lg"]
+    TABLE_MIN_HEIGHT = 250
+    TABLE_PANE_MIN_HEIGHT = 270
 
-    def __init__(self, parent):
+    def __init__(self, parent, autoload: bool = True, loader=None):
         tema = obter_tema_atual()
         super().__init__(parent, bg=tema["bg"])
         self._produtos: list[dict] = []
@@ -51,25 +53,24 @@ class PainelEstoque(tk.Frame):
         self._kpi_cards: list[Card] = []
         self._kpi_title_labels: list[tk.Label] = []
         self._filtros_after_id: str | None = None
+        self._loader = loader
         self._build_ui()
         self.bind("<Destroy>", self._on_destroy, add="+")
-        self.atualizar()
+        if autoload:
+            self.solicitar_atualizacao()
 
     def _build_ui(self):
         tema = obter_tema_atual()
 
-        # Cabeçalho da página
-        PageHeader(
-            self,
-            "Estoque",
-            "Gestão operacional de produtos, movimentações e baixo estoque em uma visão unificada.",
-            "Atualizar",
-            self.atualizar,
-        ).pack(fill="x", padx=ESPACOS["lg"], pady=ESPACOS["lg"])
+        # Cabeçalho operacional compacto preserva altura para a listagem.
+        header = tk.Frame(self, bg=tema["bg"], padx=ESPACOS["lg"], pady=7)
+        header.pack(fill="x")
+        tk.Label(header, text="Produtos", bg=tema["bg"], fg=tema["text"], font=FONTES["titulo"]).pack(side="left")
+        action_button(header, text="Atualizar", command=self.solicitar_atualizacao, variant="secondary", padx=10, pady=5).pack(side="right")
 
         # Cards compactos de indicadores (KPIs)
         self._cards_frame = tk.Frame(self, bg=tema["bg"], padx=ESPACOS["lg"])
-        self._cards_frame.pack(fill="x", pady=(0, 12))
+        self._cards_frame.pack(fill="x", pady=(0, 6))
 
         kpi_config = (
             ("ativos", "SKUs ativos", "primary"),
@@ -83,7 +84,7 @@ class PainelEstoque(tk.Frame):
         )
 
         for indice, (chave, titulo, tipo_cor) in enumerate(kpi_config):
-            card = Card(self._cards_frame, padding=10)
+            card = Card(self._cards_frame, padding=6)
             card.grid(row=0, column=indice, sticky="nsew", padx=(0, 6), pady=0)
             self._kpi_cards.append(card)
 
@@ -101,19 +102,19 @@ class PainelEstoque(tk.Frame):
                     )
                 )
             )
-            tk.Frame(card, bg=bar_color, height=3).pack(fill="x", pady=(0, 6))
+            tk.Frame(card, bg=bar_color, height=2).pack(fill="x", pady=(0, 2))
 
             titulo_label = tk.Label(
                 card,
                 text=titulo,
                 bg=tema["surface"],
                 fg=tema["text_muted"],
-                font=FONTES["label_sm"],
+                font=("Segoe UI", 7, "bold"),
             )
             titulo_label.pack(anchor="w")
             self._kpi_title_labels.append(titulo_label)
-            lbl = tk.Label(card, text="0", bg=tema["surface"], fg=tema["text"], font=FONTES["numero_card"])
-            lbl.pack(anchor="w", pady=(2, 0))
+            lbl = tk.Label(card, text="0", bg=tema["surface"], fg=tema["text"], font=("Segoe UI", 12, "bold"))
+            lbl.pack(anchor="w", pady=(1, 0))
             self._resumo_labels[chave] = lbl
 
         self._cards_frame.bind("<Configure>", self._ajustar_kpis)
@@ -132,8 +133,8 @@ class PainelEstoque(tk.Frame):
         self._paned.add(self._top_pane, minsize=88, stretch="never")
 
         # Card de Busca e Filtros
-        filtros_card = Card(self._top_pane, padding=ESPACOS["md"])
-        filtros_card.pack(fill="x", padx=ESPACOS["lg"], pady=(0, ESPACOS["sm"]))
+        filtros_card = Card(self._top_pane, padding=8)
+        filtros_card.pack(fill="x", padx=ESPACOS["lg"], pady=(0, 5))
 
         filtros_header = SectionHeader(
             filtros_card,
@@ -144,17 +145,26 @@ class PainelEstoque(tk.Frame):
         )
         filtros_header.pack(fill="x")
         self._btn_toggle_filtros = filtros_header.action_button
-        self._filtros_content = tk.Frame(filtros_card, bg=tema["surface"])
 
-        # Campo de Busca proeminente (SearchInput)
+        # A busca é o controle principal da tela e permanece sempre disponível.
         self._search_input = SearchInput(
-            self._filtros_content,
+            filtros_card,
             textvariable=self._var_busca,
             placeholder="Buscar por código, código de barras ou nome do produto...",
             on_return=self._renderizar_tabela,
         )
-        self._search_input.pack(fill="x", pady=(0, 10))
+        self._search_input.pack(fill="x", pady=(8, 0))
         self._var_busca.trace_add("write", lambda *_: self._renderizar_tabela())
+
+        # Filtros avançados flutuam sobre a tela: a tabela não perde altura.
+        self._filtros_content = tk.Frame(
+            self,
+            bg=tema["surface"],
+            bd=1,
+            relief="solid",
+            padx=8,
+            pady=8,
+        )
 
         # Controles de Filtro secundários
         filtros_grid = tk.Frame(self._filtros_content, bg=tema["surface"])
@@ -267,8 +277,8 @@ class PainelEstoque(tk.Frame):
         )
         self._lbl_resultados.pack(anchor="w", pady=(4, 0))
 
-        acoes_card = Card(self._top_pane, padding=10)
-        acoes_card.pack(fill="x", padx=ESPACOS["lg"], pady=(0, ESPACOS["sm"]))
+        acoes_card = Card(self._top_pane, padding=6)
+        acoes_card.pack(fill="x", padx=ESPACOS["lg"], pady=(0, 5))
 
         btn_box_top = tk.Frame(acoes_card, bg=tema["surface"])
         btn_box_top.pack(fill="x")
@@ -286,7 +296,7 @@ class PainelEstoque(tk.Frame):
 
         for texto, variant, cmd in botoes_esquerda_top:
             self._action_buttons.append(
-                action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=12, pady=7)
+                action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=10, pady=5)
             )
 
         botoes_direita_top = [
@@ -297,15 +307,17 @@ class PainelEstoque(tk.Frame):
 
         for texto, variant, cmd in botoes_direita_top:
             self._action_buttons.append(
-                action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=12, pady=7)
+                action_button(btn_box_top, text=texto, command=cmd, variant=variant, padx=10, pady=5)
             )
         btn_box_top.bind("<Configure>", self._ajustar_acoes)
 
         # Tabela de Produtos (Container)
         self._table_pane = tk.Frame(self._paned, bg=tema["bg"], padx=ESPACOS["lg"])
-        self._paned.add(self._table_pane, minsize=200, stretch="always")
+        self._paned.add(self._table_pane, minsize=self.TABLE_PANE_MIN_HEIGHT, stretch="always")
         self._tabela_box = Card(self._table_pane, padding=0)
         self._tabela_box.pack(fill="both", expand=True)
+        self._tabela_box.rowconfigure(0, weight=1)
+        self._tabela_box.columnconfigure(0, weight=1)
 
         colunas = ("codigo", "produto", "categoria", "qtd", "minimo", "pedido", "abc", "demanda", "status", "ativo")
         self._tree = ttk.Treeview(self._tabela_box, columns=colunas, show="headings", height=20)
@@ -335,9 +347,9 @@ class PainelEstoque(tk.Frame):
         }
         for coluna in colunas:
             self._tree.heading(coluna, text=titulos[coluna])
-            self._tree.column(coluna, width=larguras[coluna], anchor="center")
-        self._tree.column("produto", anchor="w")
-        self._tree.column("categoria", anchor="w")
+            self._tree.column(coluna, width=larguras[coluna], minwidth=55, anchor="center", stretch=False)
+        self._tree.column("produto", anchor="w", stretch=True, minwidth=220)
+        self._tree.column("categoria", anchor="w", stretch=True, minwidth=100)
 
         # Configuração de tags com cores dinâmicas do tema
         self._configurar_tags_tabela()
@@ -345,9 +357,11 @@ class PainelEstoque(tk.Frame):
         self._tree.bind("<Double-1>", lambda _event: self._abrir_detalhe())
 
         self._scroll = ttk.Scrollbar(self._tabela_box, orient="vertical", command=self._tree.yview)
-        self._tree.configure(yscrollcommand=self._scroll.set)
-        self._tree.pack(side="left", fill="both", expand=True)
-        self._scroll.pack(side="right", fill="y")
+        self._scroll_horizontal = ttk.Scrollbar(self._tabela_box, orient="horizontal", command=self._tree.xview)
+        self._tree.configure(yscrollcommand=self._scroll.set, xscrollcommand=self._scroll_horizontal.set)
+        self._tree.grid(row=0, column=0, sticky="nsew")
+        self._scroll.grid(row=0, column=1, sticky="ns")
+        self._scroll_horizontal.grid(row=1, column=0, sticky="ew")
 
         # Componente de Estado Vazio
         self._empty_state = EmptyState(
@@ -358,20 +372,37 @@ class PainelEstoque(tk.Frame):
             action_text="Limpar Filtros",
             action=self._limpar_filtros,
         )
+        self.bind("<Configure>", self._reposicionar_filtros_avancados, add="+")
         self._agendar_ajuste_divisor()
 
 
     def _toggle_filtros(self) -> None:
         self._filtros_collapsed = not self._filtros_collapsed
         if self._filtros_collapsed:
-            self._filtros_content.pack_forget()
+            self._filtros_content.place_forget()
             self._btn_toggle_filtros.configure(text="Mostrar filtros ▾")
-            self._agendar_ajuste_divisor()
+        else:
+            self.update_idletasks()
+            self._posicionar_filtros_avancados()
+            self._btn_toggle_filtros.configure(text="Ocultar filtros ▴")
+            self._search_input.entry.focus_set()
+
+    def _posicionar_filtros_avancados(self) -> None:
+        if self._filtros_collapsed or not self._search_input.winfo_ismapped():
             return
-        self._filtros_content.pack(fill="x", pady=(10, 0))
-        self._btn_toggle_filtros.configure(text="Ocultar filtros ▴")
-        self._search_input.entry.focus_set()
-        self._agendar_ajuste_divisor()
+        x = self._search_input.winfo_rootx() - self.winfo_rootx()
+        y = (
+            self._search_input.winfo_rooty()
+            - self.winfo_rooty()
+            + self._search_input.winfo_height()
+            + 4
+        )
+        self._filtros_content.place(x=x, y=y, width=self._search_input.winfo_width())
+        self._filtros_content.lift()
+
+    def _reposicionar_filtros_avancados(self, _event=None) -> None:
+        if not self._filtros_collapsed:
+            self.after_idle(self._posicionar_filtros_avancados)
 
     def _agendar_ajuste_divisor(self) -> None:
         if self._filtros_after_id:
@@ -382,6 +413,10 @@ class PainelEstoque(tk.Frame):
         self._filtros_after_id = None
         self.update_idletasks()
         altura = self._top_pane.winfo_reqheight()
+        altura_disponivel = self._paned.winfo_height()
+        altura_maxima = altura_disponivel - self.TABLE_PANE_MIN_HEIGHT - int(self._paned.cget("sashwidth"))
+        if altura_maxima > 0:
+            altura = min(altura, altura_maxima)
         self._paned.paneconfigure(self._top_pane, minsize=altura)
         self._paned.sash_place(0, 0, altura)
 
@@ -405,9 +440,9 @@ class PainelEstoque(tk.Frame):
                 padx=(0, 6),
                 pady=(0, 6) if compacto else 0,
             )
-            card.configure(padx=6 if compacto else 10, pady=6 if compacto else 10)
+            card.configure(padx=4 if compacto else 5, pady=3)
         for label in self._resumo_labels.values():
-            label.configure(font=("Segoe UI", 12 if compacto else 15, "bold"))
+            label.configure(font=("Segoe UI", 11 if compacto else 12, "bold"))
 
     def _ajustar_acoes(self, event) -> None:
         colunas = 5 if event.width < 1000 else 10
@@ -456,27 +491,32 @@ class PainelEstoque(tk.Frame):
         self._var_sem_movimento.set(False)
         self._renderizar_tabela()
 
-    def atualizar(self):
+    def atualizar(self, snapshot: dict | None = None):
         tema = obter_tema_atual()
         self.configure(bg=tema["bg"])
         self._configurar_tags_tabela()
 
-        produtos = db.listar_produtos_estoque(incluir_inativos=True)
-        config = db.configuracoes()
-        self._categorias = ["Todas"] + db.opcoes_produtos("categoria")
-        self._fornecedores = ["Todos"] + db.opcoes_produtos("fornecedor")
+        snapshot = snapshot or db.snapshot_operacional_estoque()
+        self._categorias = ["Todas"] + snapshot["categorias"]
+        self._fornecedores = ["Todos"] + snapshot["fornecedores"]
         self._categoria_box.configure(values=self._categorias)
         self._fornecedor_box.configure(values=self._fornecedores)
         if self._var_categoria.get() not in self._categorias:
             self._var_categoria.set("Todas")
         if self._var_fornecedor.get() not in self._fornecedores:
             self._var_fornecedor.set("Todos")
-        with db.get_conn() as conn:
-            self._produtos = calculos.indicadores_produtos(conn, produtos, config)
+        self._produtos = snapshot["produtos"]
         resumo = calculos.resumo_estoque(self._produtos)
-        ativos = sum(1 for produto in self._produtos if int(produto.get("ativo") or 1) == 1)
-        inativos = sum(1 for produto in self._produtos if int(produto.get("ativo") or 1) == 0)
-        sem_custo = sum(1 for produto in self._produtos if float(produto.get("custo_unitario") or 0) <= 0)
+        ativos = sum(
+            1 for produto in self._produtos
+            if int(produto.get("ativo", 1) or 0) == 1
+        )
+        inativos = len(self._produtos) - ativos
+        sem_custo = sum(
+            1 for produto in self._produtos
+            if int(produto.get("ativo", 1) or 0) == 1
+            and produto.get("custo_unitario") is None
+        )
 
         self._resumo_labels["ativos"].config(text=str(ativos), fg=tema["text"])
         self._resumo_labels["inativos"].config(text=str(inativos), fg=tema["text_muted"])
@@ -489,9 +529,15 @@ class PainelEstoque(tk.Frame):
 
         self._renderizar_tabela()
 
+    def solicitar_atualizacao(self) -> None:
+        if self._loader:
+            self._loader(self.atualizar)
+        else:
+            self.atualizar()
+
     def _produtos_filtrados(self) -> list[dict]:
         filtros = calculos.FiltrosEstoque(
-            termo=self._var_busca.get(),
+            termo=self._search_input.value(),
             status=self._var_status.get(),
             curva_abc=self._var_abc.get(),
             categoria=self._var_categoria.get(),
@@ -511,16 +557,18 @@ class PainelEstoque(tk.Frame):
             self._tree.delete(item)
 
         if not produtos:
-            self._tree.pack_forget()
-            self._scroll.pack_forget()
+            self._tree.grid_remove()
+            self._scroll.grid_remove()
+            self._scroll_horizontal.grid_remove()
             if self._empty_state:
-                self._empty_state.pack(fill="both", expand=True)
+                self._empty_state.grid(row=0, column=0, columnspan=2, sticky="nsew")
             return
 
         if self._empty_state:
-            self._empty_state.pack_forget()
-        self._tree.pack(side="left", fill="both", expand=True)
-        self._scroll.pack(side="right", fill="y")
+            self._empty_state.grid_remove()
+        self._tree.grid()
+        self._scroll.grid()
+        self._scroll_horizontal.grid()
 
         for produto in produtos:
             status = produto["status"]
@@ -725,7 +773,8 @@ class PainelEstoque(tk.Frame):
         campos: dict[str, tk.StringVar] = {}
 
         def criar_campo(label: str, chave: str, padrao: str = ""):
-            var = tk.StringVar(value=str((produto or {}).get(chave) or padrao))
+            valor = (produto or {}).get(chave)
+            var = tk.StringVar(value=str(padrao if valor is None else valor))
             lf = LabeledField(
                 frame,
                 label=label,
@@ -743,10 +792,11 @@ class PainelEstoque(tk.Frame):
         criar_campo("Fornecedor", "fornecedor")
         criar_campo("Unidade", "unidade", "un")
         criar_campo("Preço de Venda (R$)", "preco", "0")
-        criar_campo("Custo Unitário (R$)", "custo_unitario", "0")
+        criar_campo("Custo Unitário (R$, opcional)", "custo_unitario")
 
         if not produto:
             criar_campo("Estoque Inicial", "estoque_inicial", "0")
+            criar_campo("Operador Responsável", "responsavel")
 
         criar_campo("Estoque Mínimo", "estoque_minimo", "0")
         criar_campo("Ponto de Pedido", "ponto_pedido", "0")
@@ -772,6 +822,10 @@ class PainelEstoque(tk.Frame):
         def numero_float(chave: str) -> float:
             return float((campos[chave].get() or "0").replace(",", "."))
 
+        def numero_float_opcional(chave: str) -> float | None:
+            texto = campos[chave].get().strip()
+            return float(texto.replace(",", ".")) if texto else None
+
         def numero_int(chave: str) -> int:
             return int(campos[chave].get() or 0)
 
@@ -785,7 +839,7 @@ class PainelEstoque(tk.Frame):
                     "fornecedor": campos["fornecedor"].get(),
                     "unidade": campos["unidade"].get(),
                     "preco": numero_float("preco"),
-                    "custo_unitario": numero_float("custo_unitario"),
+                    "custo_unitario": numero_float_opcional("custo_unitario"),
                     "estoque_minimo": numero_int("estoque_minimo"),
                     "ponto_pedido": numero_int("ponto_pedido"),
                     "lead_time_dias": numero_int("lead_time_dias"),
@@ -795,8 +849,14 @@ class PainelEstoque(tk.Frame):
                 }
                 if not produto:
                     dados["estoque_inicial"] = numero_int("estoque_inicial")
+                    dados["responsavel"] = campos["responsavel"].get().strip()
+                    if not dados["responsavel"]:
+                        raise ValueError("Operador responsável é obrigatório.")
             except ValueError:
-                messagebox.showerror("Dados inválidos", "Revise os campos numéricos.")
+                messagebox.showerror(
+                    "Dados inválidos",
+                    "Revise os campos numéricos e informe o Operador responsável.",
+                )
                 return
             resultado["dados"] = dados
             win.close()
@@ -818,7 +878,7 @@ class PainelEstoque(tk.Frame):
             return None
 
         tema = obter_tema_atual()
-        win = BaseModal(self, title=titulo, subtitle="Selecione o produto e informe a quantidade", width=540, height=420)
+        win = BaseModal(self, title=titulo, subtitle="Selecione o produto e informe a quantidade", width=540, height=480)
 
         mapa = {f"{p['codigo']} - {p['nome']}": p for p in produtos}
 
@@ -860,10 +920,43 @@ class PainelEstoque(tk.Frame):
         lf_obs.widget.pack(fill="x", ipady=4)
         lf_obs.pack(fill="x", pady=(0, 10))
 
-        resultado = {"ok": False}
+        operador_var = tk.StringVar()
+        lf_operador = LabeledField(
+            win.body_frame,
+            label="Operador Responsável",
+            widget_factory=lambda parent: StyledEntry(parent, textvariable=operador_var),
+            bg=tema["bg"],
+        )
+        lf_operador.widget.pack(fill="x", ipady=4)
+        lf_operador.pack(fill="x", pady=(0, 10))
+
+        resultado = {"dados": None}
 
         def confirmar():
-            resultado["ok"] = True
+            try:
+                quantidade = int(qtd_var.get())
+                custo = (
+                    float(custo_var.get().replace(",", "."))
+                    if custo_var.get().strip()
+                    else None
+                )
+            except ValueError:
+                messagebox.showerror("Dados inválidos", "Informe uma quantidade válida.")
+                return
+            operador = operador_var.get().strip()
+            if not operador:
+                messagebox.showerror(
+                    "Operador obrigatório",
+                    "Informe o Operador responsável pela movimentação.",
+                )
+                return
+            resultado["dados"] = (
+                mapa[produto_var.get()],
+                quantidade,
+                custo,
+                obs_var.get(),
+                operador,
+            )
             win.close()
 
         action_button(win.footer_frame, text="Cancelar", command=win.close, variant="ghost").pack(
@@ -874,40 +967,58 @@ class PainelEstoque(tk.Frame):
         )
 
         self.wait_window(win)
-        if not resultado["ok"]:
-            return None
-        try:
-            quantidade = int(qtd_var.get())
-            custo = float(custo_var.get().replace(",", ".")) if custo_var.get().strip() else None
-        except ValueError:
-            messagebox.showerror("Dados inválidos", "Informe uma quantidade válida.")
-            return None
-        return mapa[produto_var.get()], quantidade, custo, obs_var.get()
+        return resultado["dados"]
+
+    def _alertar_saldo_negativo(self, saldo: int) -> None:
+        if saldo < 0:
+            messagebox.showwarning(
+                "Estoque negativo",
+                f"Movimentação registrada e auditada. Saldo resultante: {saldo}.",
+            )
 
     def _entrada(self):
         dados = self._dialog_produto_quantidade("Entrada de estoque", pedir_custo=True)
         if not dados:
             return
-        produto, quantidade, custo, observacao = dados
-        db.registrar_entrada_estoque(produto["id"], quantidade, custo_unitario=custo, observacao=observacao)
+        produto, quantidade, custo, observacao, operador = dados
+        saldo = estoque_service.registrar_entrada_estoque(
+            produto["id"],
+            quantidade,
+            custo_unitario=custo,
+            observacao=observacao,
+            responsavel=operador,
+        )
+        self._alertar_saldo_negativo(saldo)
         self.atualizar()
 
     def _ajuste(self):
         dados = self._dialog_produto_quantidade("Ajuste por contagem (Inventário)")
         if not dados:
             return
-        produto, quantidade, _custo, observacao = dados
-        db.ajustar_estoque_por_contagem(produto["id"], quantidade, observacao=observacao)
+        produto, quantidade, _custo, observacao, operador = dados
+        saldo = estoque_service.ajustar_estoque_por_contagem(
+            produto["id"],
+            quantidade,
+            observacao=observacao,
+            responsavel=operador,
+        )
+        self._alertar_saldo_negativo(saldo)
         self.atualizar()
 
     def _perda(self):
         dados = self._dialog_produto_quantidade("Registrar perda de estoque")
         if not dados:
             return
-        produto, quantidade, _custo, observacao = dados
+        produto, quantidade, _custo, observacao, operador = dados
 
         def _executar_perda():
-            db.registrar_perda_estoque(produto["id"], quantidade, observacao=observacao)
+            saldo = estoque_service.registrar_perda_estoque(
+                produto["id"],
+                quantidade,
+                observacao=observacao,
+                responsavel=operador,
+            )
+            self._alertar_saldo_negativo(saldo)
             self.atualizar()
 
         confirmar_acao_sensivel(
@@ -1001,8 +1112,7 @@ class PainelEstoque(tk.Frame):
 
     def _recalcular_abc(self):
         config = db.configuracoes()
-        with db.get_conn() as conn:
-            total = calculos.classificar_abc(conn, config)
+        total = db.recalcular_curva_abc()
         self.atualizar()
         messagebox.showinfo("ABC recalculado", f"{total} produtos classificados.")
 

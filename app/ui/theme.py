@@ -1,15 +1,15 @@
-"""Tema visual compartilhado da aplicacao (Variante A - Command Center)."""
+"""Tema visual compartilhado da aplicação (Variant B)."""
 
 from __future__ import annotations
 
 from app.formatting import moeda
 
-# Tokens base inspirados na Variante A "Command Center"
+# Tokens base da Variant B: carrinho prioritário e trilho de conferência.
 TEMA_CLARO = {
     # Cores de superficie e fundo
     "bg": "#F3F5F4",
     "surface": "#FFFFFF",
-    "surface_2": "#EEF2F0",
+    "surface_2": "#F1F4F1",
     "surface_3": "#FAFCFB",
     "surface_hover": "#E4EAE6",
     # Casca do aplicativo: um tom mais profundo cria separação sem competir
@@ -18,21 +18,21 @@ TEMA_CLARO = {
     "shell_text": "#F7F5EF",
     "shell_muted": "#C7D4CD",
     # Cores de texto
-    "text": "#17201C",
-    "text_muted": "#64706A",
+    "text": "#18231E",
+    "text_muted": "#65716B",
     "text_on_primary": "#FFFFFF",
     "text_on_dark": "#F6F4EF",
     # Bordas
-    "border": "#D7DEDA",
-    "border_soft": "#E7ECE9",
+    "border": "#D9E1DC",
+    "border_soft": "#C5D0C9",
     # Identidade (Verde / Dourado)
-    "primary": "#0F6E56",
-    "primary_hover": "#198262",
-    "primary_soft": "#E3F4EC",
-    "gold": "#C9972C",
-    "gold_soft": "#F8ECD0",
+    "primary": "#176348",
+    "primary_hover": "#237A5B",
+    "primary_soft": "#E7F3EC",
+    "gold": "#B8882C",
+    "gold_soft": "#FBF2DF",
     # Semantica
-    "danger": "#A83333",
+    "danger": "#A33E38",
     "danger_soft": "#FCE9E9",
     "warning": "#9B6500",
     "warning_soft": "#FFF2D2",
@@ -42,7 +42,7 @@ TEMA_CLARO = {
     "purple_fg": "#6B2A8F",
     "neutral_soft": "#E8ECEA",
     # Foco de teclado
-    "focus_ring": "#C9972C",
+    "focus_ring": "#B8882C",
     "focus_ring_width": 2,
     # Aliases legados para retrocompatibilidade
     "primaria": "#0F6E56",

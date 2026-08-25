@@ -3,6 +3,7 @@
 import unittest
 import tkinter as tk
 import tempfile
+import time
 from pathlib import Path
 
 from app import database
@@ -10,6 +11,12 @@ from app.ui.app_window import CaixaApp
 
 
 class VendaVarianteAUITest(unittest.TestCase):
+
+    def _aguardar(self, app, condicao, timeout=2.0):
+        limite = time.monotonic() + timeout
+        while not condicao() and time.monotonic() < limite:
+            app.update()
+            time.sleep(0.01)
 
     def setUp(self):
         self._db_path_original = database.DB_PATH
@@ -21,14 +28,16 @@ class VendaVarianteAUITest(unittest.TestCase):
         with database.get_conn() as conn:
             conn.execute(
                 """
-                INSERT INTO produtos (codigo, cod_barras, nome, preco, estoque)
-                VALUES ('P1', '789000001', 'Produto Normal', 15.0, 20)
+                INSERT INTO produtos
+                    (codigo, cod_barras, nome, preco_centavos, estoque)
+                VALUES ('P1', '789000001', 'Produto Normal', 1500, 20)
                 """
             )
             conn.execute(
                 """
-                INSERT INTO produtos (codigo, cod_barras, nome, preco, estoque)
-                VALUES ('P2', '789000002', 'Produto Estoque Baixo', 25.0, 3)
+                INSERT INTO produtos
+                    (codigo, cod_barras, nome, preco_centavos, estoque)
+                VALUES ('P2', '789000002', 'Produto Estoque Baixo', 2500, 3)
                 """
             )
 
@@ -49,6 +58,7 @@ class VendaVarianteAUITest(unittest.TestCase):
             # Simula busca por codigo exato 'P1'
             app._var_busca.set("P1")
             app._on_enter_busca()
+            self._aguardar(app, lambda: bool(app._carrinho))
 
             self.assertEqual(len(app._carrinho), 1)
             self.assertEqual(app._carrinho[0]["codigo"], "P1")
@@ -133,9 +143,12 @@ class VendaVarianteAUITest(unittest.TestCase):
             return
 
         try:
-            for geometria in ("1366x768", "900x650"):
+            for geometria in ("1366x768", "900x650", "760x560"):
                 app.geometry(geometria)
                 app.update()
+                if geometria == "760x560":
+                    self.assertGreaterEqual(app._left_panel.winfo_width(), 450)
+                    self.assertGreaterEqual(app._right_panel.winfo_width(), 270)
                 for tab_id in app._notebook.tabs():
                     app._notebook.select(tab_id)
                     app.update()
@@ -218,6 +231,8 @@ class VendaVarianteAUITest(unittest.TestCase):
         try:
             app._var_busca.set("P1")
             app._on_enter_busca()
+            self._aguardar(app, lambda: bool(app._carrinho))
+            app._var_responsavel.set("Operadora Teste")
 
             self.assertTrue(app.bind_all("<F4>"))
             self.assertTrue(app.bind_all("<F8>"))
@@ -309,6 +324,7 @@ class VendaVarianteAUITest(unittest.TestCase):
             return
 
         formas_encontradas = []
+        app._adicionar_produto(dict(database.buscar_produto("P1")[0]))
 
         def inspecionar_modal(tentativas=20):
             modais = [

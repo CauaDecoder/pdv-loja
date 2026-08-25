@@ -75,6 +75,7 @@ class ImportacaoGuidedUITest(unittest.TestCase):
             self.assertEqual(view._etapa_atual, 4)
 
             # Executa importação
+            view._operador_var.set("Ana")
             view._executar_importacao()
             self.assertIsNotNone(view._resultado_importacao)
             self.assertEqual(view._resultado_importacao["inseridos"], 1)

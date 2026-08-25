@@ -11,6 +11,7 @@ import math
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 
 
 STATUS_ORDEM = {"CRITICO": 0, "ALERTA": 1, "MORTO": 2, "OK": 3, "INATIVO": 4}
@@ -70,7 +71,7 @@ def filtrar_produtos(
             return False
         if filtros.ativos == "Inativos" and ativo != 0:
             return False
-        if filtros.sem_custo and float(produto.get("custo_unitario") or 0) > 0:
+        if filtros.sem_custo and produto.get("custo_unitario") is not None:
             return False
         if filtros.sem_minimo and int(produto.get("estoque_minimo") or 0) > 0:
             return False
@@ -103,11 +104,12 @@ def demanda_media_diaria(
     data_limite = (datetime.now() - timedelta(days=janela_dias)).strftime("%Y-%m-%d")
     row = conn.execute(
         """
-        SELECT COALESCE(SUM(ABS(quantidade)), 0) AS total
-        FROM movimentacoes_estoque
-        WHERE produto_id = ?
-          AND tipo = 'VENDA'
-          AND data_iso >= ?
+        SELECT COALESCE(SUM(i.quantidade), 0) AS total
+        FROM vendas_itens i
+        JOIN vendas_cabecalho h ON h.id = i.venda_id
+        WHERE i.produto_id = ?
+          AND h.status <> 'Cancelada'
+          AND h.data >= ?
         """,
         (produto_id, data_limite),
     ).fetchone()
@@ -132,16 +134,31 @@ def valor_estoque(produto: dict) -> float:
     return valor_a_custo(produto)
 
 
-def valor_a_custo(produto: dict) -> float:
+def _valor_total_em_reais(
+    produto: dict,
+    campo_centavos: str,
+    campo_legado: str,
+) -> float:
     estoque = int(produto.get("estoque") or 0)
-    custo = float(produto.get("custo_unitario") or 0)
-    return round(estoque * custo, 2)
+    centavos = produto.get(campo_centavos)
+    if centavos is not None:
+        total = Decimal(estoque * int(centavos)) / Decimal(100)
+    else:
+        unitario = Decimal(str(produto.get(campo_legado) or 0))
+        total = Decimal(estoque) * unitario
+    return float(total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def valor_a_custo(produto: dict) -> float:
+    return _valor_total_em_reais(
+        produto,
+        "custo_unitario_centavos",
+        "custo_unitario",
+    )
 
 
 def valor_a_venda(produto: dict) -> float:
-    estoque = int(produto.get("estoque") or 0)
-    preco = float(produto.get("preco") or 0)
-    return round(estoque * preco, 2)
+    return _valor_total_em_reais(produto, "preco_centavos", "preco")
 
 
 def sugerir_estoque_minimo(demanda: float, fator_seguranca: float = 1.5) -> int:
@@ -160,7 +177,7 @@ def status_estoque(
     ultimo_movimento: str,
     estoque_morto_dias: int = 90,
 ) -> str:
-    if int(produto.get("ativo") or 1) == 0:
+    if int(produto.get("ativo", 1) or 0) == 0:
         return "INATIVO"
 
     estoque = int(produto.get("estoque") or 0)
@@ -226,20 +243,38 @@ def classificar_abc(conn: sqlite3.Connection, config: dict[str, str]) -> int:
     limite_a = _config_float(config, "abc_limite_a", 0.80)
     limite_b = _config_float(config, "abc_limite_b", 0.95)
     produtos = [dict(row) for row in conn.execute("SELECT * FROM produtos WHERE ativo = 1").fetchall()]
-    produtos.sort(key=valor_estoque, reverse=True)
-    total = sum(max(valor_estoque(produto), 0) for produto in produtos)
+
+    if config.get("abc_metodo") == "receita_vendas":
+        receita_por_produto = {
+            int(row["produto_id"]): int(row["receita_centavos"] or 0)
+            for row in conn.execute(
+                """
+                SELECT i.produto_id, SUM(i.subtotal_centavos) AS receita_centavos
+                FROM vendas_itens i
+                JOIN vendas_cabecalho h ON h.id = i.venda_id
+                WHERE h.status <> 'Cancelada'
+                GROUP BY i.produto_id
+                """
+            ).fetchall()
+        }
+        metrica = lambda produto: receita_por_produto.get(int(produto["id"]), 0)
+    else:
+        metrica = valor_estoque
+
+    produtos.sort(key=metrica, reverse=True)
+    total = sum(max(metrica(produto), 0) for produto in produtos)
 
     acumulado = 0.0
     for produto in produtos:
-        valor = max(valor_estoque(produto), 0)
-        acumulado += valor
-        percentual = (acumulado / total) if total else 1
-        if percentual <= limite_a:
+        valor = max(metrica(produto), 0)
+        percentual_anterior = (acumulado / total) if total else 1
+        if percentual_anterior < limite_a:
             curva = "A"
-        elif percentual <= limite_b:
+        elif percentual_anterior < limite_b:
             curva = "B"
         else:
             curva = "C"
+        acumulado += valor
         conn.execute("UPDATE produtos SET curva_abc = ? WHERE id = ?", (curva, produto["id"]))
     return len(produtos)
 
@@ -255,6 +290,8 @@ def resumo_estoque(indicadores: list[dict]) -> dict:
         "valor_total_venda": 0.0,
     }
     for produto in indicadores:
+        if int(produto.get("ativo", 1) or 0) == 0:
+            continue
         resumo["ativos"] += 1
         resumo["valor_total"] += float(produto.get("valor_estoque") or 0)
         resumo["valor_total_custo"] += float(produto.get("valor_a_custo") or 0)

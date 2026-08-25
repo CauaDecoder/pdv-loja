@@ -65,6 +65,13 @@ def _money() -> str:
 
 
 def _descricao_pagamento(venda: dict) -> str:
+    pagamentos = venda.get("pagamentos") or []
+    if pagamentos:
+        return " + ".join(
+            f"{pagamento['forma']} | {pagamento['destino']} | "
+            f"R$ {pagamento['valor_centavos'] / 100:,.2f}"
+            for pagamento in pagamentos
+        ).replace(",", "X").replace(".", ",").replace("X", ".")
     detalhe = (venda.get("pagamento_detalhe") or "").strip()
     if detalhe:
         return f"{venda['pagamento']} | {detalhe}"
@@ -90,6 +97,7 @@ def _agrupar_vendas(linhas: list[dict]) -> list[dict]:
                 "troco": linha.get("troco"),
                 "responsavel": (linha.get("responsavel") or "").strip(),
                 "status": (linha.get("status") or "valid").strip(),
+                "pagamentos": linha.get("pagamentos") or [],
                 "itens": [],
                 "total": 0.0,
             }
@@ -103,6 +111,7 @@ def _agrupar_vendas(linhas: list[dict]) -> list[dict]:
                 "quantidade": linha["quantidade"],
                 "preco_unit": float(linha["preco_unit"]),
                 "subtotal": subtotal,
+                "custo_unitario_centavos": linha.get("custo_unitario_centavos"),
             }
         )
         venda_atual["total"] += subtotal
@@ -116,9 +125,25 @@ def _agrupar_vendas(linhas: list[dict]) -> list[dict]:
 def _resumo_pagamentos(vendas: list[dict]) -> dict[str, dict]:
     resumo: dict[str, dict] = {}
     for venda in vendas:
-        bucket = resumo.setdefault(venda["pagamento"], {"transacoes": 0, "total": 0.0})
-        bucket["transacoes"] += 1
-        bucket["total"] += venda["total"]
+        pagamentos = venda.get("pagamentos") or []
+        if not pagamentos:
+            pagamentos = [
+                {
+                    "forma": venda["pagamento"],
+                    "valor_centavos": round(venda["total"] * 100),
+                }
+            ]
+        formas_contadas: set[str] = set()
+        for pagamento in pagamentos:
+            forma = pagamento["forma"]
+            bucket = resumo.setdefault(
+                forma,
+                {"transacoes": 0, "total": 0.0},
+            )
+            if forma not in formas_contadas:
+                bucket["transacoes"] += 1
+                formas_contadas.add(forma)
+            bucket["total"] += int(pagamento["valor_centavos"]) / 100
     return resumo
 
 
@@ -514,6 +539,84 @@ def _aba_canceladas(
         ws.row_dimensions[indice].height = 22
 
 
+def _aba_custos_margem(wb: Workbook, vendas: list[dict]) -> None:
+    ws = wb.create_sheet("Custos e Margem")
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A2"
+    headers = [
+        "N. Venda",
+        "Receita (R$)",
+        "Custo conhecido (R$)",
+        "Margem bruta (R$)",
+        "Situação do custo",
+    ]
+    for coluna, header in enumerate(headers, 1):
+        celula = ws.cell(row=1, column=coluna, value=header)
+        celula.font = _font(bold=True, color=BRANCO)
+        celula.fill = _fill(VERDE_ESC)
+        celula.alignment = _align("center")
+
+    receita_total_centavos = 0
+    custo_total_centavos = 0
+    custos_ausentes = 0
+    for indice, venda in enumerate(vendas, 2):
+        receita_centavos = round(venda["total"] * 100)
+        custos = [
+            item.get("custo_unitario_centavos")
+            for item in venda["itens"]
+        ]
+        ausentes = sum(custo is None for custo in custos)
+        custo_centavos = sum(
+            int(custo) * int(item["quantidade"])
+            for item, custo in zip(venda["itens"], custos)
+            if custo is not None
+        )
+        margem_centavos = (
+            receita_centavos - custo_centavos if ausentes == 0 else None
+        )
+        valores = [
+            venda["num_venda"],
+            receita_centavos / 100,
+            custo_centavos / 100,
+            margem_centavos / 100 if margem_centavos is not None else None,
+            "Completo" if ausentes == 0 else f"Incompleto ({ausentes} item(ns) sem custo)",
+        ]
+        for coluna, valor in enumerate(valores, 1):
+            celula = ws.cell(row=indice, column=coluna, value=valor)
+            celula.border = _border()
+            celula.alignment = _align("center")
+            if coluna in (2, 3, 4):
+                celula.number_format = _money()
+        receita_total_centavos += receita_centavos
+        custo_total_centavos += custo_centavos
+        custos_ausentes += ausentes
+
+    total_row = len(vendas) + 3
+    ws.cell(row=total_row, column=1, value="TOTAL").font = _font(
+        bold=True, color=VERDE_ESC
+    )
+    ws.cell(row=total_row, column=2, value=receita_total_centavos / 100)
+    ws.cell(row=total_row, column=3, value=custo_total_centavos / 100)
+    ws.cell(
+        row=total_row,
+        column=4,
+        value=(
+            (receita_total_centavos - custo_total_centavos) / 100
+            if custos_ausentes == 0
+            else None
+        ),
+    )
+    ws.cell(
+        row=total_row,
+        column=5,
+        value="Completo" if custos_ausentes == 0 else "Margem incompleta",
+    )
+    for coluna in (2, 3, 4):
+        ws.cell(row=total_row, column=coluna).number_format = _money()
+    for letra, largura in {"A": 14, "B": 18, "C": 24, "D": 22, "E": 34}.items():
+        ws.column_dimensions[letra].width = largura
+
+
 def gerar_relatorio(
     linhas: list,
     data: str,
@@ -552,6 +655,7 @@ def gerar_relatorio(
         resumo["total"],
         periodo_seq,
     )
+    _aba_custos_margem(wb, vendas)
     _aba_canceladas(wb, vendas_canceladas, data, periodo_seq)
 
     pasta = Path(pasta_saida)
@@ -559,5 +663,68 @@ def gerar_relatorio(
     data_fmt = data.replace("/", "-")
     sufixo = f"_periodo-{periodo_seq:02d}" if periodo_seq else ""
     destino = pasta / f"Relatorio_{data_fmt}{sufixo}.xlsx"
+    wb.save(destino)
+    return destino
+
+
+def gerar_relatorio_filtrado(dados: dict, pasta_saida: str | Path = ".") -> Path:
+    """Gera XLSX com resumo e detalhes de uma consulta filtrada."""
+    pasta = Path(pasta_saida)
+    pasta.mkdir(parents=True, exist_ok=True)
+    destino = pasta / "relatorio_vendas_filtrado.xlsx"
+    wb = Workbook()
+    resumo = wb.active
+    resumo.title = "Resumo"
+    resumo.append(["Relatório de vendas"])
+    filtros = dados.get("filtros", {})
+    resumo.append(["Data inicial", filtros.get("data_inicial", ""), "Data final", filtros.get("data_final", "")])
+    resumo.append(["Total filtrado (R$)", dados.get("total_centavos", 0) / 100])
+    resumo.append([])
+    resumo.append(["Forma", "Destino", "Transações", "Total (R$)"])
+    for item in dados.get("resumo", []):
+        resumo.append([item["forma"], item["destino"], item["transacoes"], item["total_centavos"] / 100])
+    vendas = wb.create_sheet("Vendas")
+    vendas.append([
+        "Período", "Venda", "Data", "Hora", "Status", "Responsável",
+        "Total completo (R$)", "Valor no filtro (R$)",
+        "Custo conhecido (R$)", "Margem bruta (R$)", "Situação do custo",
+    ])
+    for item in dados.get("vendas", []):
+        margem = item.get("margem_bruta_centavos")
+        vendas.append([
+            item.get("periodo_id"), item["num_venda"], item["data"], item["hora"],
+            item["status"], item.get("responsavel", ""), item["total_centavos"] / 100,
+            item["valor_filtrado_centavos"] / 100,
+            item["custo_conhecido_centavos"] / 100,
+            margem / 100 if margem is not None else None,
+            "Completo" if item["custos_ausentes"] == 0 else "Incompleto",
+        ])
+    pagamentos = wb.create_sheet("Pagamentos")
+    pagamentos.append(["Período", "Venda", "Forma", "Destino", "Valor (R$)"])
+    for item in dados.get("pagamentos", []):
+        pagamentos.append([item["periodo_id"], item["num_venda"], item["forma"], item["destino"], item["valor_centavos"] / 100])
+    itens = wb.create_sheet("Itens")
+    itens.append([
+        "Período", "Venda", "Código", "Produto", "Quantidade",
+        "Preço unitário", "Subtotal", "Custo unitário", "Custo total", "Status",
+    ])
+    for item in dados.get("itens", []):
+        custo = item.get("custo_unitario_centavos")
+        itens.append([
+            item["periodo_id"], item["num_venda"], item["codigo"], item["nome"],
+            item["quantidade"], item["preco_unit"], item["subtotal"],
+            custo / 100 if custo is not None else None,
+            custo * item["quantidade"] / 100 if custo is not None else None,
+            item["status"],
+        ])
+    canceladas = wb.create_sheet("Canceladas")
+    canceladas.append(["Período", "Venda", "Data", "Hora", "Responsável", "Total completo (R$)", "Valor no filtro (R$)"])
+    for item in dados.get("canceladas", []):
+        canceladas.append([item["periodo_id"], item["num_venda"], item["data"], item["hora"], item.get("responsavel", ""), item["total"], item["valor_filtrado_centavos"] / 100])
+    for sheet in wb.worksheets:
+        sheet.freeze_panes = "A2"
+        for column in sheet.columns:
+            width = max(len(str(cell.value or "")) for cell in column) + 2
+            sheet.column_dimensions[column[0].column_letter].width = min(width, 32)
     wb.save(destino)
     return destino

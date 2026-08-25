@@ -4,17 +4,30 @@ Basilica Menor Nossa Senhora das Dores - Sistema de Caixa
 """
 
 import csv
+import hashlib
+import json
 import os
 import sqlite3
 import unicodedata
+import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 from openpyxl import load_workbook
 
+from app.contracts import (
+    DatabaseUpgradeRequired,
+    FORMAS_PAGAMENTO,
+    ResultadoVenda,
+    SCHEMA_VERSION,
+    STATUS_VENDA_ATIVA,
+    reconciliar_integridade,
+    valor_para_centavos,
+)
 from app.paths import DATA_DIR
 
-DB_PATH = DATA_DIR / "loja.db"
+DB_PATH = Path(os.getenv("CAIXA_DB_PATH", DATA_DIR / "loja.db"))
 
 CONFIG_PADRAO = {
     "abc_metodo": ("valor_estoque", "Metodo ABC: valor_estoque ou receita_vendas"),
@@ -70,11 +83,38 @@ def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, factory=SQLiteConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
+
+
+def reconciliar_integridade_banco() -> dict:
+    """Retorna reconciliação completa do banco configurado."""
+    with get_conn() as conn:
+        return reconciliar_integridade(conn).to_dict()
+
+
+def _validar_versao_banco_existente() -> None:
+    if not DB_PATH.exists():
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        versao = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    finally:
+        conn.close()
+    if versao == 0:
+        raise DatabaseUpgradeRequired(
+            "Banco sem versão. Use scripts/resetar_banco_local.py após criar backup."
+        )
+    if versao != SCHEMA_VERSION:
+        raise DatabaseUpgradeRequired(
+            f"Versão de banco {versao} incompatível com schema {SCHEMA_VERSION}."
+        )
 
 
 def inicializar():
     """Cria as tabelas se ainda nao existirem."""
+    _validar_versao_banco_existente()
     with get_conn() as conn:
         conn.executescript(
             """
@@ -83,30 +123,16 @@ def inicializar():
                 codigo     TEXT    UNIQUE NOT NULL,
                 cod_barras TEXT,
                 nome       TEXT    NOT NULL,
-                preco      REAL    NOT NULL CHECK(preco >= 0),
+                preco_centavos INTEGER NOT NULL CHECK(preco_centavos >= 0),
+                custo_unitario_centavos INTEGER CHECK(
+                    custo_unitario_centavos IS NULL OR custo_unitario_centavos >= 0
+                ),
+                preco REAL GENERATED ALWAYS AS (preco_centavos / 100.0) VIRTUAL,
+                custo_unitario REAL GENERATED ALWAYS AS (
+                    CASE WHEN custo_unitario_centavos IS NULL THEN NULL
+                         ELSE custo_unitario_centavos / 100.0 END
+                ) VIRTUAL,
                 estoque    INTEGER DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS vendas (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                num_venda   INTEGER NOT NULL,
-                data        TEXT    NOT NULL,
-                hora        TEXT    NOT NULL,
-                periodo_id  INTEGER,
-                produto_id  INTEGER,
-                codigo      TEXT    NOT NULL,
-                nome        TEXT    NOT NULL,
-                quantidade  INTEGER NOT NULL CHECK(quantidade > 0),
-                preco_unit  REAL    NOT NULL,
-                subtotal    REAL    NOT NULL,
-                pagamento   TEXT    NOT NULL,
-                pagamento_detalhe TEXT NOT NULL DEFAULT '',
-                valor_recebido REAL,
-                troco       REAL,
-                responsavel TEXT    NOT NULL DEFAULT '',
-                status      TEXT    NOT NULL DEFAULT 'valid'
-                    CHECK (status IN ('valid', 'corrected', 'cancelled')),
-                FOREIGN KEY (produto_id) REFERENCES produtos(id)
             );
 
             CREATE TABLE IF NOT EXISTS periodos_caixa (
@@ -119,64 +145,29 @@ def inicializar():
                 UNIQUE (data, sequencia)
             );
 
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_periodo_unico_aberto
+                ON periodos_caixa ((1))
+                WHERE fechado_em IS NULL;
+
             CREATE INDEX IF NOT EXISTS idx_produtos_codigo
                 ON produtos(codigo);
             CREATE INDEX IF NOT EXISTS idx_produtos_codbarras
                 ON produtos(cod_barras);
-            CREATE INDEX IF NOT EXISTS idx_vendas_data
-                ON vendas(data);
-            CREATE INDEX IF NOT EXISTS idx_vendas_num
-                ON vendas(num_venda);
             CREATE INDEX IF NOT EXISTS idx_periodos_data
                 ON periodos_caixa(data, fechado_em);
             """
         )
-        _garantir_colunas_vendas(conn)
         _garantir_colunas_produtos(conn)
         _criar_tabelas_estoque(conn)
         _criar_tabelas_correcoes(conn)
         _seed_configuracoes(conn)
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_vendas_periodo
-            ON vendas(periodo_id)
-            """
-        )
-        _migrar_periodos_caixa(conn)
-        _backfill_movimentacoes_vendas(conn)
-
-
-def _garantir_colunas_vendas(conn: sqlite3.Connection):
-    colunas = {row["name"] for row in conn.execute("PRAGMA table_info(vendas)").fetchall()}
-    if "periodo_id" not in colunas:
-        conn.execute("ALTER TABLE vendas ADD COLUMN periodo_id INTEGER")
-    if "responsavel" not in colunas:
-        conn.execute("ALTER TABLE vendas ADD COLUMN responsavel TEXT NOT NULL DEFAULT ''")
-    if "pagamento_detalhe" not in colunas:
-        conn.execute("ALTER TABLE vendas ADD COLUMN pagamento_detalhe TEXT NOT NULL DEFAULT ''")
-    if "valor_recebido" not in colunas:
-        conn.execute("ALTER TABLE vendas ADD COLUMN valor_recebido REAL")
-    if "troco" not in colunas:
-        conn.execute("ALTER TABLE vendas ADD COLUMN troco REAL")
-    if "status" not in colunas:
-        conn.execute("ALTER TABLE vendas ADD COLUMN status TEXT NOT NULL DEFAULT 'valid'")
-    conn.execute("UPDATE vendas SET responsavel = '' WHERE responsavel IS NULL")
-    conn.execute("UPDATE vendas SET pagamento_detalhe = '' WHERE pagamento_detalhe IS NULL")
-    conn.execute(
-        """
-        UPDATE vendas
-        SET status = 'valid'
-        WHERE status IS NULL
-           OR TRIM(status) = ''
-           OR status NOT IN ('valid', 'corrected', 'cancelled')
-        """
-    )
+        _criar_tabelas_financeiras(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def _garantir_colunas_produtos(conn: sqlite3.Connection):
     colunas = {row["name"] for row in conn.execute("PRAGMA table_info(produtos)").fetchall()}
     novas_colunas = {
-        "custo_unitario": "REAL DEFAULT 0",
         "estoque_minimo": "INTEGER DEFAULT 0",
         "ponto_pedido": "INTEGER DEFAULT 0",
         "lead_time_dias": "INTEGER DEFAULT 7",
@@ -190,7 +181,6 @@ def _garantir_colunas_produtos(conn: sqlite3.Connection):
     for nome, definicao in novas_colunas.items():
         if nome not in colunas:
             conn.execute(f"ALTER TABLE produtos ADD COLUMN {nome} {definicao}")
-    conn.execute("UPDATE produtos SET custo_unitario = 0 WHERE custo_unitario IS NULL")
     conn.execute("UPDATE produtos SET estoque_minimo = 0 WHERE estoque_minimo IS NULL")
     conn.execute("UPDATE produtos SET ponto_pedido = 0 WHERE ponto_pedido IS NULL")
     conn.execute("UPDATE produtos SET lead_time_dias = 7 WHERE lead_time_dias IS NULL")
@@ -222,11 +212,24 @@ def _criar_tabelas_estoque(conn: sqlite3.Connection):
             FOREIGN KEY (produto_id) REFERENCES produtos(id)
         );
 
-        CREATE TABLE IF NOT EXISTS configuracoes (
-            chave     TEXT PRIMARY KEY,
-            valor     TEXT NOT NULL,
-            descricao TEXT DEFAULT ''
-        );
+            CREATE TABLE IF NOT EXISTS configuracoes (
+                chave     TEXT PRIMARY KEY,
+                valor     TEXT NOT NULL,
+                descricao TEXT DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS importacoes_lotes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lote_id TEXT NOT NULL UNIQUE,
+                sha256 TEXT NOT NULL UNIQUE,
+                nome_arquivo TEXT NOT NULL,
+                modo TEXT NOT NULL,
+                responsavel TEXT NOT NULL,
+                criado_em TEXT NOT NULL,
+                finalizado_em TEXT,
+                total_linhas INTEGER NOT NULL,
+                resultado_json TEXT NOT NULL DEFAULT ''
+            );
 
         CREATE INDEX IF NOT EXISTS idx_mov_produto
             ON movimentacoes_estoque(produto_id);
@@ -240,6 +243,9 @@ def _criar_tabelas_estoque(conn: sqlite3.Connection):
             ON movimentacoes_estoque(tipo);
         CREATE INDEX IF NOT EXISTS idx_mov_tipo_data_iso
             ON movimentacoes_estoque(tipo, data_iso);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_produtos_codbarras_unico
+            ON produtos(cod_barras)
+            WHERE cod_barras IS NOT NULL AND TRIM(cod_barras) <> '';
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mov_venda_ref_produto
             ON movimentacoes_estoque(referencia, produto_id, tipo)
             WHERE tipo = 'VENDA';
@@ -266,7 +272,6 @@ def _criar_tabelas_correcoes(conn: sqlite3.Connection):
     _garantir_colunas_correcoes(conn)
     conn.executescript(
         """
-
         CREATE INDEX IF NOT EXISTS idx_vendas_correcoes_venda
             ON vendas_correcoes(periodo_id, num_venda);
         CREATE INDEX IF NOT EXISTS idx_vendas_correcoes_criado
@@ -274,6 +279,160 @@ def _criar_tabelas_correcoes(conn: sqlite3.Connection):
         """
     )
 
+
+def _criar_tabelas_financeiras(conn: sqlite3.Connection):
+    """Cria destinos, pagamentos estruturados e comandos idempotentes."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS vendas_cabecalho (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL UNIQUE CHECK (TRIM(uuid) <> ''),
+            periodo_id INTEGER NOT NULL,
+            num_venda INTEGER NOT NULL,
+            data TEXT NOT NULL,
+            hora TEXT NOT NULL,
+            responsavel TEXT NOT NULL CHECK (TRIM(responsavel) <> ''),
+            status TEXT NOT NULL DEFAULT 'Ativa'
+                CHECK (status IN ('Ativa','Corrigida','Cancelada')),
+            UNIQUE (periodo_id, num_venda),
+            FOREIGN KEY (periodo_id) REFERENCES periodos_caixa(id)
+        );
+        CREATE TABLE IF NOT EXISTS vendas_itens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            venda_id INTEGER NOT NULL,
+            produto_id INTEGER,
+            codigo TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            quantidade INTEGER NOT NULL,
+            preco_unit_centavos INTEGER NOT NULL,
+            subtotal_centavos INTEGER NOT NULL,
+            custo_unitario_centavos INTEGER CHECK (
+                custo_unitario_centavos IS NULL OR custo_unitario_centavos >= 0
+            ),
+            legacy_id INTEGER UNIQUE,
+            FOREIGN KEY (venda_id) REFERENCES vendas_cabecalho(id),
+            FOREIGN KEY (produto_id) REFERENCES produtos(id)
+        );
+        CREATE TABLE IF NOT EXISTS destinos_financeiros (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE,
+            ativo INTEGER NOT NULL DEFAULT 1 CHECK (ativo IN (0, 1)),
+            criado_em TEXT NOT NULL,
+            inativado_em TEXT
+        );
+        CREATE TABLE IF NOT EXISTS destino_formas_pagamento (
+            destino_id INTEGER NOT NULL,
+            forma TEXT NOT NULL CHECK (forma IN ('Dinheiro','Pix','Debito','Credito')),
+            padrao INTEGER NOT NULL DEFAULT 0 CHECK (padrao IN (0, 1)),
+            PRIMARY KEY (destino_id, forma),
+            FOREIGN KEY (destino_id) REFERENCES destinos_financeiros(id)
+        );
+        CREATE TABLE IF NOT EXISTS pagamentos_venda (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            venda_id INTEGER NOT NULL,
+            forma TEXT NOT NULL CHECK (forma IN ('Dinheiro','Pix','Debito','Credito')),
+            destino_id INTEGER NOT NULL,
+            valor_centavos INTEGER NOT NULL CHECK (valor_centavos > 0),
+            detalhe TEXT NOT NULL DEFAULT '',
+            valor_recebido_centavos INTEGER,
+            troco_centavos INTEGER,
+            CHECK (
+                (forma = 'Dinheiro'
+                 AND valor_recebido_centavos IS NOT NULL
+                 AND troco_centavos IS NOT NULL
+                 AND valor_recebido_centavos >= valor_centavos
+                 AND troco_centavos = valor_recebido_centavos - valor_centavos)
+                OR
+                (forma <> 'Dinheiro'
+                 AND valor_recebido_centavos IS NULL
+                 AND troco_centavos IS NULL)
+            ),
+            FOREIGN KEY (destino_id, forma)
+                REFERENCES destino_formas_pagamento(destino_id, forma),
+            FOREIGN KEY (venda_id) REFERENCES vendas_cabecalho(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pagamentos_venda ON pagamentos_venda(venda_id);
+        CREATE TABLE IF NOT EXISTS fechamentos_periodo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            periodo_id INTEGER NOT NULL UNIQUE,
+            responsavel TEXT NOT NULL CHECK (TRIM(responsavel) <> ''),
+            fechado_em TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL CHECK (json_valid(snapshot_json)),
+            total_vendas_centavos INTEGER NOT NULL,
+            total_pagamentos_centavos INTEGER NOT NULL,
+            divergencia_centavos INTEGER NOT NULL,
+            proximo_periodo_id INTEGER NOT NULL UNIQUE,
+            FOREIGN KEY (periodo_id) REFERENCES periodos_caixa(id),
+            FOREIGN KEY (proximo_periodo_id) REFERENCES periodos_caixa(id)
+        );
+        CREATE TABLE IF NOT EXISTS terminais (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE,
+            credencial_hash TEXT NOT NULL UNIQUE,
+            permite_offline INTEGER NOT NULL DEFAULT 0 CHECK (permite_offline IN (0, 1)),
+            ativo INTEGER NOT NULL DEFAULT 1 CHECK (ativo IN (0, 1)),
+            criado_em TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS comandos_sincronizacao (
+            chave TEXT PRIMARY KEY,
+            terminal_id INTEGER,
+            tipo TEXT NOT NULL,
+            recebido_em TEXT NOT NULL,
+            resposta_json TEXT NOT NULL,
+            FOREIGN KEY (terminal_id) REFERENCES terminais(id)
+        );
+        """
+    )
+    agora = datetime.now().isoformat(timespec="seconds")
+    for nome, forma in (("Caixa fisico", "Dinheiro"), ("Conta Pix", "Pix"), ("Maquininha", "Debito"),):
+        conn.execute(
+            "INSERT OR IGNORE INTO destinos_financeiros (nome, criado_em) VALUES (?, ?)",
+            (nome, agora),
+        )
+    maquinha = conn.execute("SELECT id FROM destinos_financeiros WHERE nome = 'Maquininha'").fetchone()
+    for row in conn.execute("SELECT id, nome FROM destinos_financeiros").fetchall():
+        forma = {"Caixa fisico": "Dinheiro", "Conta Pix": "Pix", "Maquininha": "Debito"}.get(row["nome"])
+        if forma:
+            conn.execute(
+                "INSERT OR IGNORE INTO destino_formas_pagamento (destino_id, forma, padrao) VALUES (?, ?, 1)",
+                (row["id"], forma),
+            )
+    if maquinha:
+        conn.execute(
+            "INSERT OR IGNORE INTO destino_formas_pagamento (destino_id, forma, padrao) VALUES (?, 'Credito', 1)",
+            (maquinha["id"],),
+        )
+    conn.execute("DROP VIEW IF EXISTS vendas")
+    conn.execute(
+        """CREATE VIEW vendas AS
+           SELECT i.id,
+                  h.id AS venda_id,
+                  h.num_venda,
+                  substr(h.data,9,2)||'/'||substr(h.data,6,2)||'/'||substr(h.data,1,4) AS data,
+                  h.hora,
+                  h.periodo_id,
+                  i.produto_id,
+                  i.codigo,
+                  i.nome,
+                  i.quantidade,
+                  i.preco_unit_centavos / 100.0 AS preco_unit,
+                  i.subtotal_centavos / 100.0 AS subtotal,
+                  CASE WHEN (SELECT COUNT(*) FROM pagamentos_venda p WHERE p.venda_id=h.id) = 1
+                       THEN (SELECT MAX(p.forma) FROM pagamentos_venda p WHERE p.venda_id=h.id)
+                       ELSE 'Mais de uma forma' END AS pagamento,
+                  COALESCE((SELECT GROUP_CONCAT(p.detalhe, ' + ') FROM pagamentos_venda p
+                            WHERE p.venda_id=h.id AND TRIM(p.detalhe) <> ''), '') AS pagamento_detalhe,
+                  (SELECT MAX(p.valor_recebido_centavos) / 100.0 FROM pagamentos_venda p
+                   WHERE p.venda_id=h.id) AS valor_recebido,
+                  (SELECT MAX(p.troco_centavos) / 100.0 FROM pagamentos_venda p
+                   WHERE p.venda_id=h.id) AS troco,
+                  h.responsavel,
+                  h.status,
+                  i.preco_unit_centavos,
+                  i.subtotal_centavos
+           FROM vendas_itens i
+           JOIN vendas_cabecalho h ON h.id = i.venda_id"""
+    )
 
 def _garantir_colunas_correcoes(conn: sqlite3.Connection):
     """Migra tabelas de auditoria parciais sem descartar historico existente."""
@@ -309,54 +468,13 @@ def _seed_configuracoes(conn: sqlite3.Connection):
         )
 
 
-def _migrar_periodos_caixa(conn: sqlite3.Connection):
-    datas = [
-        row["data"]
-        for row in conn.execute("SELECT DISTINCT data FROM vendas ORDER BY data").fetchall()
-    ]
-    if not datas:
-        return
-
-    hoje = datetime.now().strftime("%d/%m/%Y")
-    agora_iso = datetime.now().isoformat(timespec="seconds")
-
-    for data in datas:
-        periodo = conn.execute(
-            """
-            SELECT id
-            FROM periodos_caixa
-            WHERE data = ? AND sequencia = 1
-            """,
-            (data,),
-        ).fetchone()
-
-        if periodo is None:
-            cursor = conn.execute(
-                """
-                INSERT INTO periodos_caixa (data, sequencia, aberto_em, fechado_em)
-                VALUES (?, 1, ?, ?)
-                """,
-                (data, agora_iso, None if data == hoje else agora_iso),
-            )
-            periodo_id = cursor.lastrowid
-        else:
-            periodo_id = periodo["id"]
-
-        conn.execute(
-            """
-            UPDATE vendas
-            SET periodo_id = COALESCE(periodo_id, ?)
-            WHERE data = ? AND periodo_id IS NULL
-            """,
-            (periodo_id, data),
-        )
-
-
 def _data_para_iso(data: str) -> str:
-    try:
-        return datetime.strptime(data, "%d/%m/%Y").strftime("%Y-%m-%d")
-    except ValueError:
-        return datetime.now().strftime("%Y-%m-%d")
+    for formato in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(data, formato).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    raise ValueError("Data inválida; use AAAA-MM-DD ou DD/MM/AAAA.")
 
 
 def _registrar_movimentacao_estoque(
@@ -426,32 +544,6 @@ def _registrar_movimentacao_estoque(
     return estoque_resultante
 
 
-def _backfill_movimentacoes_vendas(conn: sqlite3.Connection):
-    linhas = conn.execute(
-        """
-        SELECT periodo_id, num_venda, produto_id, quantidade, data, hora, responsavel
-        FROM vendas
-        WHERE produto_id IS NOT NULL
-        ORDER BY id
-        """
-    ).fetchall()
-    for linha in linhas:
-        referencia = f"VENDA:{linha['periodo_id'] or 0}:{linha['num_venda']}:{linha['produto_id']}"
-        _registrar_movimentacao_estoque(
-            conn,
-            linha["produto_id"],
-            "VENDA",
-            -int(linha["quantidade"]),
-            linha["data"],
-            linha["hora"],
-            referencia=referencia,
-            observacao="Backfill historico sem alterar saldo atual",
-            responsavel=linha["responsavel"] or "",
-            origem="BACKFILL",
-            alterar_saldo=False,
-        )
-
-
 def _normalizar_chave(texto: str) -> str:
     texto = unicodedata.normalize("NFKD", str(texto or ""))
     texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
@@ -487,17 +579,23 @@ def _texto_limpo(valor) -> str:
     return str(valor).strip()
 
 
-def _parse_decimal(valor) -> float:
+def _parse_decimal(valor) -> Decimal:
     texto = _texto_limpo(valor)
     if not texto:
-        return 0.0
+        return Decimal("0")
 
     texto = texto.replace("R$", "").replace(" ", "")
     if "," in texto and "." in texto:
         texto = texto.replace(".", "").replace(",", ".")
     else:
         texto = texto.replace(",", ".")
-    return float(texto)
+    try:
+        numero = Decimal(texto)
+    except InvalidOperation as erro:
+        raise ValueError("Valor decimal inválido.") from erro
+    if not numero.is_finite():
+        raise ValueError("Valor decimal inválido.")
+    return numero
 
 
 def _parse_int(valor) -> int:
@@ -635,7 +733,7 @@ def _comparar_importacao_com_banco(
 ) -> dict[str, float | int]:
     codigos_planilha: set[str] = set()
     divergencias = 0
-    valor_divergencia = 0.0
+    valor_divergencia = Decimal("0")
 
     for row in linhas:
         codigo = _texto_limpo(row.get(mapa["codigo"])) if "codigo" in mapa else ""
@@ -650,21 +748,23 @@ def _comparar_importacao_com_banco(
             custo_planilha = (
                 _parse_decimal(row.get(mapa["custo_unitario"]))
                 if "custo_unitario" in mapa
-                else 0.0
+                else Decimal("0")
             )
         except ValueError:
-            custo_planilha = 0.0
+            custo_planilha = Decimal("0")
 
         atual = conn.execute(
-            "SELECT estoque, custo_unitario FROM produtos WHERE codigo = ?",
+            "SELECT estoque, custo_unitario_centavos FROM produtos WHERE codigo = ?",
             (codigo,),
         ).fetchone()
         if not atual:
             continue
 
         estoque_atual = int(atual["estoque"] or 0)
-        custo_atual = float(atual["custo_unitario"] or 0)
-        if estoque_atual != estoque_planilha or round(custo_atual, 2) != round(custo_planilha, 2):
+        custo_atual = Decimal(int(atual["custo_unitario_centavos"] or 0)) / 100
+        if estoque_atual != estoque_planilha or custo_atual != custo_planilha.quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        ):
             divergencias += 1
             valor_divergencia += (estoque_atual * custo_atual) - (estoque_planilha * custo_planilha)
 
@@ -688,7 +788,7 @@ def _comparar_importacao_com_banco(
 
     return {
         "produtos_com_divergencia_banco": divergencias,
-        "valor_divergencia_banco": valor_divergencia,
+        "valor_divergencia_banco": float(valor_divergencia),
         "produtos_ativos_fora_da_planilha": produtos_fora,
         "valor_produtos_fora_da_planilha": valor_fora,
     }
@@ -735,6 +835,14 @@ def _carregar_planilha(caminho_arquivo: str) -> tuple[list[dict], dict[str, str]
     return produtos, mapa
 
 
+def _sha256_arquivo(caminho: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(caminho).open("rb") as arquivo:
+        for bloco in iter(lambda: arquivo.read(1024 * 1024), b""):
+            digest.update(bloco)
+    return digest.hexdigest()
+
+
 def previsualizar_importacao(caminho_arquivo: str) -> dict:
     """Analisa a planilha antes da importacao definitiva."""
     linhas_brutas, mapa = _carregar_planilha_bruta(caminho_arquivo)
@@ -744,10 +852,14 @@ def previsualizar_importacao(caminho_arquivo: str) -> dict:
     sem_preco = 0
     sem_custo = 0
     estoque_invalido = 0
+    estoque_negativo = 0
     duplicados = 0
     codigos_vistos: set[str] = set()
-    valor_custo_calculado = 0.0
-    valor_venda_calculado = 0.0
+    barras_duplicadas = 0
+    barras_vistas: set[str] = set()
+    valor_custo_calculado = Decimal("0")
+    valor_venda_calculado = Decimal("0")
+    valores_arredondados = 0
     amostra = []
 
     for row in linhas:
@@ -755,19 +867,28 @@ def previsualizar_importacao(caminho_arquivo: str) -> dict:
         nome = _texto_limpo(row.get(mapa["nome"])) if "nome" in mapa else ""
         preco_txt = _texto_limpo(row.get(mapa["preco"])) if "preco" in mapa else ""
         custo_txt = _texto_limpo(row.get(mapa["custo_unitario"])) if "custo_unitario" in mapa else ""
+        cod_barras = _texto_limpo(row.get(mapa["cod_barras"])) if "cod_barras" in mapa else ""
         try:
             estoque = _parse_int(row.get(mapa["estoque"])) if "estoque" in mapa else 0
         except ValueError:
             estoque = 0
             estoque_invalido += 1
+        if estoque < 0:
+            estoque_negativo += 1
         try:
             preco = _parse_decimal(preco_txt)
+            if preco != preco.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP):
+                valores_arredondados += 1
         except ValueError:
-            preco = 0.0
+            preco = Decimal("0")
         try:
             custo = _parse_decimal(custo_txt)
+            if custo_txt and custo != custo.quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            ):
+                valores_arredondados += 1
         except ValueError:
-            custo = 0.0
+            custo = Decimal("0")
 
         if not codigo:
             sem_codigo += 1
@@ -775,6 +896,11 @@ def previsualizar_importacao(caminho_arquivo: str) -> dict:
             duplicados += 1
         else:
             codigos_vistos.add(codigo)
+        if cod_barras:
+            if cod_barras in barras_vistas:
+                barras_duplicadas += 1
+            else:
+                barras_vistas.add(cod_barras)
         if not nome:
             sem_nome += 1
         if not preco_txt:
@@ -807,6 +933,9 @@ def previsualizar_importacao(caminho_arquivo: str) -> dict:
     with get_conn() as conn:
         resumo = _resumir_importacao(linhas, mapa, conn)
         comparacao = _comparar_importacao_com_banco(linhas, mapa, conn)
+        pode_inventario_inicial = not conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM produtos) OR EXISTS(SELECT 1 FROM movimentacoes_estoque)"
+        ).fetchone()[0]
     diferenca_custo = (
         valor_custo_calculado - custo_total_planilha
         if custo_total_planilha is not None
@@ -823,7 +952,9 @@ def previsualizar_importacao(caminho_arquivo: str) -> dict:
         "produtos_sem_preco": sem_preco,
         "produtos_sem_custo": sem_custo,
         "produtos_com_estoque_invalido": estoque_invalido,
+        "produtos_com_estoque_negativo": estoque_negativo,
         "produtos_duplicados": duplicados,
+        "codigos_barras_duplicados": barras_duplicadas,
         "produtos_inseridos_previstos": resumo["produtos_inseridos_previstos"],
         "produtos_atualizados_previstos": resumo["produtos_atualizados_previstos"],
         "produtos_ignorados_previstos": resumo["produtos_ignorados_previstos"],
@@ -837,17 +968,28 @@ def previsualizar_importacao(caminho_arquivo: str) -> dict:
         "custo_mapeado": "custo_unitario" in mapa,
         "coluna_custo": mapa.get("custo_unitario", ""),
         "coluna_custo_total": mapa.get("custo_total", ""),
-        "custo_total_planilha": custo_total_planilha,
-        "valor_custo_calculado": valor_custo_calculado,
-        "valor_venda_calculado": valor_venda_calculado,
-        "diferenca_custo": diferenca_custo,
+        "custo_total_planilha": (
+            float(custo_total_planilha) if custo_total_planilha is not None else None
+        ),
+        "valor_custo_calculado": float(valor_custo_calculado),
+        "valor_venda_calculado": float(valor_venda_calculado),
+        "diferenca_custo": (
+            float(diferenca_custo) if diferenca_custo is not None else None
+        ),
         "alerta_diferenca_custo": diferenca_custo is not None and abs(diferenca_custo) > 0.05,
+        "valores_monetarios_arredondados": valores_arredondados,
+        "alerta_arredondamento": valores_arredondados > 0,
+        "sha256": _sha256_arquivo(caminho_arquivo),
+        "pode_inventario_inicial": bool(pode_inventario_inicial),
     }
 
 
 def importar_csv(
     caminho_csv: str,
     modo_estoque: str = MODO_ESTOQUE_ATUALIZAR,
+    responsavel: str = "",
+    lote_id: str | None = None,
+    hash_arquivo: str | None = None,
 ) -> dict[str, int | str | bool]:
     """
     Importa produtos de um CSV ou Excel.
@@ -856,6 +998,33 @@ def importar_csv(
     """
     if modo_estoque not in MODOS_IMPORTACAO_ESTOQUE:
         raise ValueError(f"Modo de estoque invalido: {modo_estoque}")
+    responsavel = responsavel.strip()
+    if not responsavel:
+        raise ValueError("Operador responsável é obrigatório para importar produtos.")
+    previa = previsualizar_importacao(caminho_csv)
+    sha256 = previa["sha256"]
+    lote_id = (lote_id or "").strip()
+    hash_arquivo = (hash_arquivo or "").strip()
+    if not lote_id or not hash_arquivo:
+        raise ValueError("Lote e hash da prévia são obrigatórios para importar.")
+    if hash_arquivo != sha256:
+        raise ValueError("O arquivo mudou depois da prévia; gere nova prévia.")
+    if previa["produtos_duplicados"]:
+        raise ValueError("A planilha possui SKU duplicado.")
+    if previa["codigos_barras_duplicados"]:
+        raise ValueError("A planilha possui código de barras duplicado.")
+    invalidos = sum(
+        int(previa[campo])
+        for campo in (
+            "produtos_sem_sku",
+            "produtos_sem_nome",
+            "produtos_sem_preco",
+            "produtos_com_estoque_invalido",
+            "produtos_ignorados_previstos",
+        )
+    )
+    if invalidos:
+        raise ValueError("A planilha possui linhas inválidas; nenhuma linha foi importada.")
 
     inseridos = 0
     atualizados = 0
@@ -874,6 +1043,27 @@ def importar_csv(
         )
 
     with get_conn() as conn:
+        if modo_estoque == MODO_ESTOQUE_INVENTARIO and conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM produtos) OR EXISTS(SELECT 1 FROM movimentacoes_estoque)"
+        ).fetchone()[0]:
+            raise ValueError("Inventário Inicial exige banco operacional vazio.")
+        try:
+            conn.execute(
+                """INSERT INTO importacoes_lotes
+                   (lote_id, sha256, nome_arquivo, modo, responsavel, criado_em, total_linhas)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    lote_id,
+                    sha256,
+                    Path(caminho_csv).name,
+                    modo_estoque,
+                    responsavel,
+                    datetime.now().isoformat(timespec="seconds"),
+                    len(linhas),
+                ),
+            )
+        except sqlite3.IntegrityError as erro:
+            raise ValueError("Lote ou arquivo já importado.") from erro
         for row in linhas:
             agora = datetime.now()
             codigo = _texto_limpo(row.get(mapa["codigo"]))
@@ -881,6 +1071,13 @@ def importar_csv(
             cod_barras = (
                 _texto_limpo(row.get(mapa["cod_barras"])) if "cod_barras" in mapa else ""
             )
+            if cod_barras:
+                conflito = conn.execute(
+                    "SELECT codigo FROM produtos WHERE cod_barras = ? AND codigo <> ?",
+                    (cod_barras, codigo),
+                ).fetchone()
+                if conflito:
+                    raise ValueError("Código de barras duplicado em outro SKU.")
 
             if not codigo or not nome:
                 ignorados += 1
@@ -889,19 +1086,19 @@ def importar_csv(
             try:
                 preco = _parse_decimal(row.get(mapa["preco"]))
                 estoque = _parse_int(row.get(mapa["estoque"])) if estoque_informado else 0
+                custo_txt = _texto_limpo(row.get(mapa["custo_unitario"])) if "custo_unitario" in mapa else ""
                 custo_unitario = (
                     _parse_decimal(row.get(mapa["custo_unitario"]))
-                    if "custo_unitario" in mapa
-                    else 0.0
+                    if custo_txt
+                    else None
                 )
                 unidade = (
                     _normalizar_unidade(row.get(mapa["unidade"]))
                     if "unidade" in mapa
                     else ""
                 )
-            except ValueError:
-                ignorados += 1
-                continue
+            except ValueError as erro:
+                raise ValueError("Linha inválida encontrada durante a importação.") from erro
 
             existente = conn.execute(
                 "SELECT id, estoque FROM produtos WHERE codigo = ?", (codigo,)
@@ -911,18 +1108,19 @@ def importar_csv(
                     """
                     UPDATE produtos
                     SET nome = ?,
-                        preco = ?,
+                        preco_centavos = ?,
                         cod_barras = ?,
-                        custo_unitario = CASE WHEN ? > 0 THEN ? ELSE custo_unitario END,
+                        custo_unitario_centavos = CASE
+                            WHEN ? IS NOT NULL THEN ? ELSE custo_unitario_centavos END,
                         unidade = CASE WHEN ? <> '' THEN ? ELSE unidade END
                     WHERE codigo = ?
                     """,
                     (
                         nome,
-                        preco,
+                        valor_para_centavos(preco),
                         cod_barras or None,
                         custo_unitario,
-                        custo_unitario,
+                        valor_para_centavos(custo_unitario) if custo_unitario is not None else None,
                         unidade,
                         unidade,
                         codigo,
@@ -942,8 +1140,9 @@ def importar_csv(
                         diferenca,
                         agora.strftime("%d/%m/%Y"),
                         agora.strftime("%H:%M"),
-                        referencia=f"IMPORT:{codigo}:{agora.isoformat(timespec='seconds')}",
+                        referencia=f"IMPORT:{lote_id}:{codigo}",
                         observacao="Atualizacao de estoque por importacao de planilha",
+                        responsavel=responsavel,
                         origem="IMPORTACAO",
                         alterar_saldo=True,
                     )
@@ -953,10 +1152,18 @@ def importar_csv(
                 cursor = conn.execute(
                     """
                     INSERT INTO produtos
-                    (codigo, cod_barras, nome, preco, estoque, custo_unitario, unidade)
+                    (codigo, cod_barras, nome, preco_centavos, estoque,
+                     custo_unitario_centavos, unidade)
                     VALUES (?, ?, ?, ?, 0, ?, ?)
                     """,
-                    (codigo, cod_barras or None, nome, preco, custo_unitario, unidade or "un"),
+                    (
+                        codigo,
+                        cod_barras or None,
+                        nome,
+                        valor_para_centavos(preco),
+                        valor_para_centavos(custo_unitario) if custo_unitario is not None else None,
+                        unidade or "un",
+                    ),
                 )
                 if aplicar_estoque and estoque:
                     _registrar_movimentacao_estoque(
@@ -966,27 +1173,39 @@ def importar_csv(
                         estoque,
                         agora.strftime("%d/%m/%Y"),
                         agora.strftime("%H:%M"),
-                        referencia=f"IMPORT:{codigo}:{agora.isoformat(timespec='seconds')}",
+                        referencia=f"IMPORT:{lote_id}:{codigo}",
                         observacao="Saldo inicial por importacao de planilha",
+                        responsavel=responsavel,
                         origem="IMPORTACAO",
                         alterar_saldo=True,
                     )
                     ajustados += 1
                 inseridos += 1
-    if not inseridos and not atualizados and ignorados:
-        raise ValueError(
-            "Nao foi possivel importar a planilha. Revise se as colunas de preco e estoque estao corretas."
+        resultado = {
+            "inseridos": inseridos,
+            "atualizados": atualizados,
+            "ignorados": ignorados,
+            "ajustados": ajustados,
+            "estoque_mapeado": estoque_informado,
+            "estoque_preservado": preservados,
+            "modo_estoque": modo_estoque,
+            "coluna_estoque": mapa.get("estoque", ""),
+            "lote_id": lote_id,
+            "sha256": sha256,
+            "produtos_sem_custo": previa["produtos_sem_custo"],
+            "produtos_com_estoque_negativo": previa["produtos_com_estoque_negativo"],
+        }
+        conn.execute(
+            """UPDATE importacoes_lotes
+               SET finalizado_em = ?, resultado_json = ?
+               WHERE lote_id = ?""",
+            (
+                datetime.now().isoformat(timespec="seconds"),
+                json.dumps(resultado, ensure_ascii=False),
+                lote_id,
+            ),
         )
-    return {
-        "inseridos": inseridos,
-        "atualizados": atualizados,
-        "ignorados": ignorados,
-        "ajustados": ajustados,
-        "estoque_mapeado": estoque_informado,
-        "estoque_preservado": preservados,
-        "modo_estoque": modo_estoque,
-        "coluna_estoque": mapa.get("estoque", ""),
-    }
+    return resultado
 
 
 def buscar_produto(termo: str) -> list[sqlite3.Row]:
@@ -1015,7 +1234,33 @@ def obter_periodo(periodo_id: int) -> sqlite3.Row | None:
     return row
 
 
+def _normalizar_data_iso(data: str) -> str:
+    for formato in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(data.strip(), formato).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    raise ValueError("Data inválida; use AAAA-MM-DD ou DD/MM/AAAA.")
+
+
 def obter_ou_criar_periodo_aberto(data: str) -> sqlite3.Row:
+    data = _normalizar_data_iso(data)
+    with get_conn() as conn:
+        periodo_anterior = conn.execute(
+            """
+            SELECT id, data
+            FROM periodos_caixa
+            WHERE fechado_em IS NULL
+            LIMIT 1
+            """,
+        ).fetchone()
+    if periodo_anterior and periodo_anterior["data"] != data:
+        fechar_periodo_loja(
+            periodo_anterior["id"],
+            "Fechamento automático",
+            f"{data}T00:00:00",
+        )
+
     with get_conn() as conn:
         periodo = conn.execute(
             """
@@ -1055,23 +1300,140 @@ def atualizar_responsavel_periodo(periodo_id: int, responsavel: str):
         )
 
 
-def encerrar_periodo(periodo_id: int):
+def fechar_periodo_loja(
+    periodo_id: int,
+    responsavel: str,
+    fechado_em: str | None = None,
+) -> dict:
+    """Persiste o fechamento e abre o período seguinte na mesma transação."""
+    responsavel = responsavel.strip()
+    if not responsavel:
+        raise ValueError("Operador responsável é obrigatório para fechar o Período da Loja.")
+    fechado_em = fechado_em or datetime.now().isoformat(timespec="seconds")
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existente = conn.execute(
+            "SELECT snapshot_json FROM fechamentos_periodo WHERE periodo_id = ?",
+            (periodo_id,),
+        ).fetchone()
+        if existente:
+            return json.loads(existente["snapshot_json"])
+
+        periodo = conn.execute(
+            "SELECT data, sequencia, fechado_em FROM periodos_caixa WHERE id = ?",
+            (periodo_id,),
+        ).fetchone()
+        if periodo is None:
+            raise ValueError("Período da Loja não encontrado.")
+        if periodo["fechado_em"] is not None:
+            raise ValueError("Período da Loja fechado sem snapshot financeiro.")
+
+        totais = conn.execute(
+            """SELECT
+                   COALESCE(SUM(i.subtotal_centavos), 0) total_vendas_centavos,
+                   COALESCE(SUM(CASE WHEN i.custo_unitario_centavos IS NOT NULL
+                                     THEN i.quantidade * i.custo_unitario_centavos ELSE 0 END), 0)
+                       custo_conhecido_centavos,
+                   COALESCE(SUM(CASE WHEN i.custo_unitario_centavos IS NULL
+                                     THEN 1 ELSE 0 END), 0) custos_ausentes
+               FROM vendas_cabecalho h
+               JOIN vendas_itens i ON i.venda_id = h.id
+               WHERE h.periodo_id = ? AND h.status <> 'Cancelada'""",
+            (periodo_id,),
+        ).fetchone()
+        total_pagamentos = int(conn.execute(
+            """SELECT COALESCE(SUM(p.valor_centavos), 0)
+               FROM pagamentos_venda p
+               JOIN vendas_cabecalho h ON h.id = p.venda_id
+               WHERE h.periodo_id = ? AND h.status <> 'Cancelada'""",
+            (periodo_id,),
+        ).fetchone()[0])
+        por_forma_destino = [
+            dict(row)
+            for row in conn.execute(
+                """SELECT p.forma, p.destino_id, d.nome destino,
+                          COUNT(DISTINCT p.venda_id) transacoes,
+                          SUM(p.valor_centavos) total_centavos
+                   FROM pagamentos_venda p
+                   JOIN vendas_cabecalho h ON h.id = p.venda_id
+                   JOIN destinos_financeiros d ON d.id = p.destino_id
+                   WHERE h.periodo_id = ? AND h.status <> 'Cancelada'
+                   GROUP BY p.forma, p.destino_id, d.nome
+                   ORDER BY p.forma, p.destino_id""",
+                (periodo_id,),
+            ).fetchall()
+        ]
+        total_vendas = int(totais["total_vendas_centavos"])
+        custo_conhecido = int(totais["custo_conhecido_centavos"])
+        custos_ausentes = int(totais["custos_ausentes"])
+        divergencia = total_pagamentos - total_vendas
+        if divergencia:
+            raise ValueError(
+                f"Fechamento bloqueado por divergência de {divergencia} centavos."
+            )
+
+        try:
+            data_proximo_periodo = datetime.fromisoformat(fechado_em).date().isoformat()
+        except ValueError as erro:
+            raise ValueError("Horário de fechamento inválido; use ISO 8601.") from erro
+        proxima_sequencia = int(conn.execute(
+            "SELECT COALESCE(MAX(sequencia), 0) + 1 FROM periodos_caixa WHERE data = ?",
+            (data_proximo_periodo,),
+        ).fetchone()[0])
         conn.execute(
-            """
-            UPDATE periodos_caixa
-            SET fechado_em = COALESCE(fechado_em, ?)
-            WHERE id = ?
-            """,
-            (datetime.now().isoformat(timespec="seconds"), periodo_id),
+            "UPDATE periodos_caixa SET fechado_em = ?, responsavel = ? WHERE id = ?",
+            (fechado_em, responsavel, periodo_id),
         )
+        proximo_periodo_id = int(conn.execute(
+            """INSERT INTO periodos_caixa (data, sequencia, responsavel, aberto_em)
+               VALUES (?, ?, ?, ?) RETURNING id""",
+            (data_proximo_periodo, proxima_sequencia, responsavel, fechado_em),
+        ).fetchone()[0])
+        snapshot = {
+            "periodo_id": periodo_id,
+            "proximo_periodo_id": proximo_periodo_id,
+            "fechado_em": fechado_em,
+            "responsavel": responsavel,
+            "total_vendas_centavos": total_vendas,
+            "total_pagamentos_centavos": total_pagamentos,
+            "divergencia_centavos": divergencia,
+            "custo_conhecido_centavos": custo_conhecido,
+            "custos_ausentes": custos_ausentes,
+            "margem_bruta_centavos": (
+                None if custos_ausentes else total_vendas - custo_conhecido
+            ),
+            "por_forma_destino": por_forma_destino,
+        }
+        conn.execute(
+            """INSERT INTO fechamentos_periodo
+               (periodo_id, responsavel, fechado_em, snapshot_json,
+                total_vendas_centavos, total_pagamentos_centavos,
+                divergencia_centavos, proximo_periodo_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                periodo_id,
+                responsavel,
+                fechado_em,
+                json.dumps(snapshot, ensure_ascii=False, sort_keys=True),
+                total_vendas,
+                total_pagamentos,
+                divergencia,
+                proximo_periodo_id,
+            ),
+        )
+        return snapshot
+
+
+def encerrar_periodo(periodo_id: int, responsavel: str = "") -> dict:
+    """Fachada legada; fechamento sem Operador é recusado."""
+    return fechar_periodo_loja(periodo_id, responsavel)
 
 
 def proximo_num_venda(periodo_id: int) -> int:
     """Retorna o proximo numero de venda para o periodo atual."""
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT MAX(num_venda) FROM vendas WHERE periodo_id = ?",
+            "SELECT MAX(num_venda) FROM vendas_cabecalho WHERE periodo_id = ?",
             (periodo_id,),
         ).fetchone()
         return (row[0] or 0) + 1
@@ -1087,53 +1449,173 @@ def registrar_venda(
     troco: float | None = None,
     responsavel: str = "",
     data: str | None = None,
+    pagamentos: list[dict] | None = None,
+    chave_idempotencia: str | None = None,
+    terminal_id: int | None = None,
 ):
-    """
-    Grava todos os itens de uma venda no banco.
-
-    itens = [
-        {"produto_id": 1, "codigo": "1001", "nome": "...",
-         "quantidade": 2, "preco_unit": 18.90}
-    ]
-    """
+    """Grava uma Venda no caixa completa em uma única transação."""
     agora = datetime.now()
-    data = data or agora.strftime("%d/%m/%Y")
     hora = agora.strftime("%H:%M")
     responsavel = responsavel.strip()
     pagamento_detalhe = pagamento_detalhe.strip()
+    chave_idempotencia = (chave_idempotencia or "").strip()
+    if not responsavel:
+        raise ValueError("Operador responsável é obrigatório para concluir a Venda no caixa.")
+    if not chave_idempotencia:
+        raise ValueError("UUID idempotente é obrigatório para concluir a Venda no caixa.")
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existente = conn.execute(
+            "SELECT resposta_json FROM comandos_sincronizacao WHERE chave = ?",
+            (chave_idempotencia,),
+        ).fetchone()
+        if existente:
+            return json.loads(existente["resposta_json"])
+
+        periodo = conn.execute(
+            "SELECT data, fechado_em FROM periodos_caixa WHERE id = ?",
+            (periodo_id,),
+        ).fetchone()
+        if periodo is None:
+            raise ValueError("Período da Loja não encontrado.")
+        if periodo["fechado_em"] is not None:
+            raise ValueError("Período da Loja já está fechado.")
+        data = _normalizar_data_iso(data) if data else periodo["data"]
+        if data != periodo["data"]:
+            raise ValueError("A data da Venda no caixa não pertence ao Período da Loja.")
+
+        proximo_numero = conn.execute(
+            "SELECT COALESCE(MAX(num_venda), 0) + 1 FROM vendas_cabecalho WHERE periodo_id = ?",
+            (periodo_id,),
+        ).fetchone()[0]
+        if int(num_venda) != int(proximo_numero):
+            raise ValueError(
+                f"Número da Venda no caixa desatualizado. Próximo número: {proximo_numero}."
+            )
+
+        itens_agrupados: dict[tuple, dict] = {}
         for item in itens:
-            subtotal = item["quantidade"] * item["preco_unit"]
+            quantidade = int(item["quantidade"])
+            if quantidade <= 0:
+                raise ValueError("Quantidade da Venda no caixa deve ser positiva.")
+            preco_centavos = int(
+                item.get("preco_unit_centavos")
+                if item.get("preco_unit_centavos") is not None
+                else valor_para_centavos(item["preco_unit"])
+            )
+            chave = (
+                ("produto", int(item["produto_id"]))
+                if item.get("produto_id") is not None
+                else ("codigo", str(item["codigo"]).strip())
+            )
+            existente_item = itens_agrupados.get(chave)
+            if existente_item:
+                if existente_item["preco_unit_centavos"] != preco_centavos:
+                    raise ValueError("Produto repetido com preços diferentes.")
+                existente_item["quantidade"] += quantidade
+                continue
+            produto_id = item.get("produto_id")
+            custo_centavos = None
+            if produto_id is not None:
+                produto = conn.execute(
+                    "SELECT custo_unitario_centavos FROM produtos WHERE id = ? AND ativo = 1",
+                    (produto_id,),
+                ).fetchone()
+                if produto is None:
+                    raise ValueError("Produto não encontrado ou inativo.")
+                custo_centavos = produto["custo_unitario_centavos"]
+            itens_agrupados[chave] = {
+                "produto_id": produto_id,
+                "codigo": str(item["codigo"]).strip(),
+                "nome": str(item["nome"]).strip(),
+                "quantidade": quantidade,
+                "preco_unit_centavos": preco_centavos,
+                "custo_unitario_centavos": custo_centavos,
+            }
+        if not itens_agrupados:
+            raise ValueError("Venda no caixa sem produtos.")
+
+        total_centavos = sum(
+            item["quantidade"] * item["preco_unit_centavos"]
+            for item in itens_agrupados.values()
+        )
+        pagamentos = pagamentos or [{
+            "forma": pagamento,
+            "valor_centavos": total_centavos,
+            "detalhe": pagamento_detalhe,
+            "valor_recebido_centavos": (
+                valor_para_centavos(valor_recebido) if valor_recebido is not None else None
+            ),
+            "troco_centavos": valor_para_centavos(troco) if troco is not None else None,
+        }]
+        if sum(int(p["valor_centavos"]) for p in pagamentos) != total_centavos:
+            raise ValueError("A soma dos pagamentos deve ser igual ao total da venda.")
+        pagamentos_normalizados = []
+        for parcela in pagamentos:
+            p = dict(parcela)
+            if p["forma"] not in FORMAS_PAGAMENTO:
+                raise ValueError(f"Forma de pagamento inválida: {p['forma']}.")
+            if int(p["valor_centavos"]) <= 0:
+                raise ValueError("Parcela de pagamento deve ser positiva.")
+            valor_parcela = int(p["valor_centavos"])
+            recebido = p.get("valor_recebido_centavos")
+            troco_parcela = p.get("troco_centavos")
+            if recebido is not None:
+                recebido = int(recebido)
+            if troco_parcela is not None:
+                troco_parcela = int(troco_parcela)
+            if p["forma"] == "Dinheiro":
+                if recebido is None or troco_parcela is None:
+                    raise ValueError(
+                        "Valor recebido e troco são obrigatórios para Dinheiro."
+                    )
+                if recebido < valor_parcela or recebido - troco_parcela != valor_parcela:
+                    raise ValueError(
+                        "Valor recebido menos troco deve ser igual ao valor em Dinheiro."
+                    )
+            elif recebido is not None or troco_parcela is not None:
+                raise ValueError(
+                    "Valor recebido e troco só podem ser informados para Dinheiro."
+                )
+            p["valor_centavos"] = valor_parcela
+            p["valor_recebido_centavos"] = recebido
+            p["troco_centavos"] = troco_parcela
+            destino = conn.execute(
+                """SELECT d.id FROM destinos_financeiros d
+                   JOIN destino_formas_pagamento f ON f.destino_id = d.id
+                   WHERE d.ativo = 1 AND f.forma = ?
+                     AND (? IS NULL OR d.id = ?)
+                   ORDER BY f.padrao DESC, d.id LIMIT 1""",
+                (p["forma"], p.get("destino_id"), p.get("destino_id")),
+            ).fetchone()
+            if not destino:
+                raise ValueError(f"Destino financeiro incompatível com {p['forma']}.")
+            p["destino_id"] = destino["id"]
+            pagamentos_normalizados.append(p)
+
+        cursor_cabecalho = conn.execute(
+            """INSERT INTO vendas_cabecalho
+               (uuid, periodo_id, num_venda, data, hora, responsavel, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (chave_idempotencia, periodo_id, num_venda, data, hora, responsavel, STATUS_VENDA_ATIVA),
+        )
+        venda_id = int(cursor_cabecalho.lastrowid)
+        alertas_estoque = []
+        for item in itens_agrupados.values():
+            subtotal_centavos = item["quantidade"] * item["preco_unit_centavos"]
             conn.execute(
-                """
-                INSERT INTO vendas
-                (num_venda, data, hora, periodo_id, produto_id, codigo, nome,
-                 quantidade, preco_unit, subtotal, pagamento, pagamento_detalhe,
-                 valor_recebido, troco, responsavel)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    num_venda,
-                    data,
-                    hora,
-                    periodo_id,
-                    item.get("produto_id"),
-                    item["codigo"],
-                    item["nome"],
-                    item["quantidade"],
-                    item["preco_unit"],
-                    subtotal,
-                    pagamento,
-                    pagamento_detalhe,
-                    valor_recebido,
-                    troco,
-                    responsavel,
-                ),
+                """INSERT INTO vendas_itens
+                    (venda_id, produto_id, codigo, nome, quantidade, preco_unit_centavos,
+                    subtotal_centavos, custo_unitario_centavos)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (venda_id, item.get("produto_id"), item["codigo"], item["nome"], item["quantidade"],
+                 item["preco_unit_centavos"], subtotal_centavos,
+                 item["custo_unitario_centavos"]),
             )
             produto_id = item.get("produto_id")
             if produto_id:
                 referencia = f"VENDA:{periodo_id}:{num_venda}:{produto_id}"
-                _registrar_movimentacao_estoque(
+                saldo = _registrar_movimentacao_estoque(
                     conn,
                     produto_id,
                     "VENDA",
@@ -1146,6 +1628,33 @@ def registrar_venda(
                     origem="PDV",
                     alterar_saldo=True,
                 )
+                if saldo < 0:
+                    alertas_estoque.append(
+                        {
+                            "produto_id": produto_id,
+                            "codigo": item["codigo"],
+                            "nome": item["nome"],
+                            "saldo_resultante": saldo,
+                        }
+                    )
+        conn.executemany(
+            """INSERT INTO pagamentos_venda
+               (venda_id, forma, destino_id, valor_centavos, detalhe,
+                valor_recebido_centavos, troco_centavos)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [(
+                venda_id, p["forma"], p["destino_id"], int(p["valor_centavos"]),
+                p.get("detalhe", ""), p.get("valor_recebido_centavos"), p.get("troco_centavos"),
+            ) for p in pagamentos_normalizados],
+        )
+        resultado = ResultadoVenda(
+            periodo_id, num_venda, total_centavos, tuple(alertas_estoque)
+        ).to_dict()
+        conn.execute(
+            "INSERT INTO comandos_sincronizacao (chave, terminal_id, tipo, recebido_em, resposta_json) VALUES (?, ?, 'venda', ?, ?)",
+            (chave_idempotencia, terminal_id, datetime.now().isoformat(timespec="seconds"), json.dumps(resultado)),
+        )
+        return resultado
 
 
 def vendas_do_periodo(periodo_id: int) -> list[sqlite3.Row]:
@@ -1155,6 +1664,168 @@ def vendas_do_periodo(periodo_id: int) -> list[sqlite3.Row]:
             "SELECT * FROM vendas WHERE periodo_id = ? ORDER BY num_venda, id",
             (periodo_id,),
         ).fetchall()
+
+
+def listar_destinos_financeiros(incluir_inativos: bool = False) -> list[sqlite3.Row]:
+    """Lista destinos e formas compatíveis."""
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT d.id, d.nome, d.ativo, COALESCE(GROUP_CONCAT(f.forma), '') formas,
+                      COALESCE(GROUP_CONCAT(CASE WHEN f.padrao=1 THEN f.forma END), '') formas_padrao
+               FROM destinos_financeiros d LEFT JOIN destino_formas_pagamento f ON f.destino_id = d.id
+               WHERE d.ativo = 1 OR ? GROUP BY d.id ORDER BY d.nome""",
+            (int(incluir_inativos),),
+        ).fetchall()
+
+
+def criar_destino_financeiro(nome: str, formas: list[str], padroes: list[str] | None = None) -> int:
+    """Cria destino ativo e associa formas de pagamento."""
+    nome = nome.strip()
+    if not nome or not formas:
+        raise ValueError("Destino e formas compatíveis são obrigatórios.")
+    with get_conn() as conn:
+        destino = conn.execute(
+            "INSERT INTO destinos_financeiros (nome, criado_em) VALUES (?, ?) RETURNING id",
+            (nome, datetime.now().isoformat(timespec="seconds")),
+        ).fetchone()
+        for forma in set(formas):
+            conn.execute(
+                "INSERT INTO destino_formas_pagamento (destino_id, forma, padrao) VALUES (?, ?, ?)",
+                (destino["id"], forma, int(forma in (padroes or []))),
+            )
+        return int(destino["id"])
+
+
+def inativar_destino_financeiro(destino_id: int) -> None:
+    """Inativa destino sem remover histórico."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE destinos_financeiros SET ativo = 0, inativado_em = ? WHERE id = ?",
+            (datetime.now().isoformat(timespec="seconds"), destino_id),
+        )
+
+
+def atualizar_destino_financeiro(destino_id: int, nome: str, formas: list[str]) -> None:
+    """Renomeia destino e atualiza compatibilidades sem tocar no histórico."""
+    nome = nome.strip()
+    if not nome or not formas:
+        raise ValueError("Destino e formas compatíveis são obrigatórios.")
+    with get_conn() as conn:
+        conn.execute("UPDATE destinos_financeiros SET nome = ? WHERE id = ?", (nome, destino_id))
+        conn.execute("DELETE FROM destino_formas_pagamento WHERE destino_id = ?", (destino_id,))
+        conn.executemany(
+            "INSERT INTO destino_formas_pagamento (destino_id, forma, padrao) VALUES (?, ?, 0)",
+            [(destino_id, forma) for forma in set(formas)],
+        )
+
+
+def definir_destino_padrao(destino_id: int, formas: list[str]) -> None:
+    """Define o destino como padrão para cada forma compatível indicada."""
+    with get_conn() as conn:
+        compativeis = {row["forma"] for row in conn.execute(
+            "SELECT forma FROM destino_formas_pagamento WHERE destino_id = ?", (destino_id,)
+        )}
+        invalidas = set(formas) - compativeis
+        if invalidas:
+            raise ValueError("O destino não é compatível com todas as formas selecionadas.")
+        for forma in formas:
+            conn.execute("UPDATE destino_formas_pagamento SET padrao=0 WHERE forma = ?", (forma,))
+            conn.execute(
+                "UPDATE destino_formas_pagamento SET padrao=1 WHERE destino_id = ? AND forma = ?",
+                (destino_id, forma),
+            )
+
+
+def relatorio_vendas_filtrado(
+    data_inicial: str,
+    data_final: str,
+    forma: str | None = None,
+    destino_id: int | None = None,
+    incluir_canceladas: bool = False,
+    status: str | None = None,
+) -> dict:
+    """Calcula vendas e pagamentos filtrados por intervalo e recebimento."""
+    def _iso(data: str) -> str:
+        for formato in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(data, formato).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+        raise ValueError("Use datas no formato AAAA-MM-DD ou DD/MM/AAAA.")
+
+    inicio_iso, fim_iso = _iso(data_inicial), _iso(data_final)
+    if inicio_iso > fim_iso:
+        raise ValueError("A data inicial deve ser anterior ou igual à data final.")
+    data_sql = "CASE WHEN instr(v.data, '/') > 0 THEN substr(v.data,7,4)||'-'||substr(v.data,4,2)||'-'||substr(v.data,1,2) ELSE v.data END"
+    if status in ("Cancelada", "cancelled"):
+        status_sql = "AND v.status = 'Cancelada'"
+    elif status == "all" or incluir_canceladas:
+        status_sql = ""
+    else:
+        status_sql = "AND v.status IN ('Ativa', 'Corrigida')"
+    sales_cte = f"""WITH sales AS (
+        SELECT MAX(v.venda_id) venda_id, v.periodo_id, v.num_venda, MAX(v.data) data, MAX(v.hora) hora,
+               MAX(v.status) status, MAX(v.responsavel) responsavel, SUM(v.subtotal) total
+        FROM vendas v WHERE {data_sql} BETWEEN ? AND ? {status_sql}
+        GROUP BY v.periodo_id, v.num_venda
+    )"""
+    payment_where: list[str] = []
+    payment_params: list = []
+    if forma == "Cartao":
+        payment_where.append("p.forma IN ('Debito', 'Credito')")
+    elif forma:
+        payment_where.append("p.forma = ?")
+        payment_params.append(forma)
+    if destino_id:
+        payment_where.append("p.destino_id = ?")
+        payment_params.append(destino_id)
+    payment_filter = " AND ".join(payment_where) or "1=1"
+    params = [inicio_iso, fim_iso, *payment_params]
+    with get_conn() as conn:
+        pagamentos = conn.execute(
+            f"""{sales_cte}
+                SELECT s.periodo_id, s.num_venda, s.data, s.hora, s.status, s.responsavel,
+                       p.forma, p.destino_id, d.nome destino, SUM(p.valor_centavos) valor_centavos
+                FROM sales s JOIN pagamentos_venda p ON p.venda_id=s.venda_id
+                JOIN destinos_financeiros d ON d.id=p.destino_id
+                WHERE {payment_filter}
+                GROUP BY s.periodo_id, s.num_venda, p.forma, p.destino_id, d.nome
+                ORDER BY s.data, s.hora, s.num_venda""",
+            params,
+        ).fetchall()
+        vendas = conn.execute(
+            f"""{sales_cte}
+                SELECT s.*, SUM(p.valor_centavos) valor_filtrado_centavos
+                FROM sales s JOIN pagamentos_venda p ON p.venda_id=s.venda_id
+                WHERE {payment_filter} GROUP BY s.periodo_id, s.num_venda ORDER BY s.data, s.hora, s.num_venda""",
+            params,
+        ).fetchall()
+        itens = conn.execute(
+            f"""{sales_cte}
+                SELECT v.periodo_id, v.num_venda, v.codigo, v.nome, v.quantidade,
+                       v.preco_unit, v.subtotal, v.status
+                FROM vendas v JOIN sales s ON s.periodo_id=v.periodo_id AND s.num_venda=v.num_venda
+                WHERE EXISTS (SELECT 1 FROM pagamentos_venda p WHERE p.venda_id=s.venda_id AND {payment_filter})
+                ORDER BY v.data, v.hora, v.num_venda, v.id""",
+            params,
+        ).fetchall()
+    resumo: dict[str, dict] = {}
+    for row in pagamentos:
+        if row["status"] == "Cancelada":
+            continue
+        chave = f"{row['forma']} | {row['destino']}"
+        bucket = resumo.setdefault(chave, {"forma": row["forma"], "destino": row["destino"], "transacoes": 0, "total_centavos": 0})
+        bucket["transacoes"] += 1
+        bucket["total_centavos"] += int(row["valor_centavos"])
+    return {
+        "filtros": {"data_inicial": data_inicial, "data_final": data_final, "forma": forma, "destino_id": destino_id, "status": status or "Ativa"},
+        "vendas": [dict(row) for row in vendas if row["status"] != "Cancelada"],
+        "canceladas": [dict(row) for row in vendas if row["status"] == "Cancelada"],
+        "itens": [dict(row) for row in itens],
+        "pagamentos": [dict(row) for row in pagamentos],
+        "resumo": list(resumo.values()),
+        "total_centavos": sum(item["total_centavos"] for item in resumo.values()),
+    }
 
 
 def ultimas_vendas_periodo(periodo_id: int, limite: int = 30) -> list[sqlite3.Row]:
@@ -1193,28 +1864,99 @@ def atualizar_venda(
     troco: float | None = None,
     responsavel: str = "",
 ):
-    """Atualiza os metadados de uma venda inteira no periodo informado."""
+    """Corrige pagamento e audita o Operador sem alterar a autoria da venda."""
     pagamento_detalhe = pagamento_detalhe.strip()
     responsavel = responsavel.strip()
+    if not responsavel:
+        raise ValueError("Operador responsável é obrigatório para corrigir a Venda no caixa.")
+    if pagamento not in FORMAS_PAGAMENTO:
+        raise ValueError(f"Forma de pagamento inválida: {pagamento}.")
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        venda = conn.execute(
+            """SELECT h.id, h.status, p.fechado_em,
+                      COALESCE(SUM(i.subtotal_centavos), 0) total_centavos
+               FROM vendas_cabecalho h
+               JOIN periodos_caixa p ON p.id = h.periodo_id
+               LEFT JOIN vendas_itens i ON i.venda_id = h.id
+               WHERE h.periodo_id = ? AND h.num_venda = ?
+               GROUP BY h.id""",
+            (periodo_id, num_venda),
+        ).fetchone()
+        if venda is None:
+            raise ValueError("Venda no caixa não encontrada.")
+        if venda["fechado_em"] is not None:
+            raise ValueError("Período da Loja já está fechado.")
+        if venda["status"] == "Cancelada":
+            raise ValueError("Venda no caixa cancelada não pode ser corrigida.")
+        total_centavos = int(venda["total_centavos"])
+        recebido_centavos = (
+            valor_para_centavos(valor_recebido) if valor_recebido is not None else None
+        )
+        troco_centavos = valor_para_centavos(troco) if troco is not None else None
+        if pagamento == "Dinheiro":
+            if recebido_centavos is None or troco_centavos is None:
+                raise ValueError(
+                    "Valor recebido e troco são obrigatórios para Dinheiro."
+                )
+            if recebido_centavos < total_centavos or recebido_centavos - troco_centavos != total_centavos:
+                raise ValueError(
+                    "Valor recebido menos troco deve ser igual ao valor em Dinheiro."
+                )
+        elif recebido_centavos is not None or troco_centavos is not None:
+            raise ValueError(
+                "Valor recebido e troco só podem ser informados para Dinheiro."
+            )
+        destino = conn.execute(
+            """SELECT d.id FROM destinos_financeiros d
+               JOIN destino_formas_pagamento f ON f.destino_id = d.id
+               WHERE d.ativo = 1 AND f.forma = ?
+               ORDER BY f.padrao DESC, d.id LIMIT 1""",
+            (pagamento,),
+        ).fetchone()
+        if destino is None:
+            raise ValueError(f"Nenhum destino financeiro ativo para {pagamento}.")
+        antes = [dict(row) for row in conn.execute(
+            "SELECT * FROM pagamentos_venda WHERE venda_id = ? ORDER BY id",
+            (venda["id"],),
+        ).fetchall()]
+        conn.execute("DELETE FROM pagamentos_venda WHERE venda_id = ?", (venda["id"],))
         conn.execute(
-            """
-            UPDATE vendas
-            SET pagamento = ?,
-                pagamento_detalhe = ?,
-                valor_recebido = ?,
-                troco = ?,
-                responsavel = ?
-            WHERE periodo_id = ? AND num_venda = ?
-            """,
+            """INSERT INTO pagamentos_venda
+               (venda_id, forma, destino_id, valor_centavos,
+                detalhe, valor_recebido_centavos, troco_centavos)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
+                venda["id"],
                 pagamento,
+                destino["id"],
+                total_centavos,
                 pagamento_detalhe,
-                valor_recebido,
-                troco,
-                responsavel,
+                recebido_centavos,
+                troco_centavos,
+            ),
+        )
+        conn.execute(
+            """UPDATE vendas_cabecalho
+               SET status = 'Corrigida'
+               WHERE periodo_id = ? AND num_venda = ?""",
+            (periodo_id, num_venda),
+        )
+        depois = [dict(row) for row in conn.execute(
+            "SELECT * FROM pagamentos_venda WHERE venda_id = ? ORDER BY id",
+            (venda["id"],),
+        ).fetchall()]
+        conn.execute(
+            """INSERT INTO vendas_correcoes
+               (periodo_id, num_venda, acao, responsavel, criado_em, antes, depois)
+               VALUES (?, ?, 'ALTERAR_PAGAMENTO', ?, ?, ?, ?)""",
+            (
                 periodo_id,
                 num_venda,
+                responsavel,
+                datetime.now().isoformat(timespec="seconds"),
+                json.dumps(antes, ensure_ascii=False),
+                json.dumps(depois, ensure_ascii=False),
             ),
         )
 
@@ -1253,7 +1995,7 @@ def criar_produto(dados: dict) -> int:
         cursor = conn.execute(
             """
             INSERT INTO produtos
-            (codigo, cod_barras, nome, preco, estoque, custo_unitario, estoque_minimo,
+            (codigo, cod_barras, nome, preco_centavos, estoque, custo_unitario_centavos, estoque_minimo,
              ponto_pedido, lead_time_dias, curva_abc, categoria, fornecedor, unidade,
              ativo, observacoes)
             VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1262,8 +2004,9 @@ def criar_produto(dados: dict) -> int:
                 codigo,
                 _texto_limpo(dados.get("cod_barras")) or None,
                 nome,
-                float(dados.get("preco") or 0),
-                float(dados.get("custo_unitario") or 0),
+                valor_para_centavos(dados.get("preco") or 0),
+                (valor_para_centavos(dados["custo_unitario"])
+                 if dados.get("custo_unitario") not in (None, "") else None),
                 int(dados.get("estoque_minimo") or 0),
                 int(dados.get("ponto_pedido") or 0),
                 int(dados.get("lead_time_dias") or 7),
@@ -1305,8 +2048,8 @@ def atualizar_produto(produto_id: int, dados: dict) -> None:
             SET codigo = ?,
                 cod_barras = ?,
                 nome = ?,
-                preco = ?,
-                custo_unitario = ?,
+                preco_centavos = ?,
+                custo_unitario_centavos = ?,
                 estoque_minimo = ?,
                 ponto_pedido = ?,
                 lead_time_dias = ?,
@@ -1322,8 +2065,9 @@ def atualizar_produto(produto_id: int, dados: dict) -> None:
                 codigo,
                 _texto_limpo(dados.get("cod_barras")) or None,
                 nome,
-                float(dados.get("preco") or 0),
-                float(dados.get("custo_unitario") or 0),
+                valor_para_centavos(dados.get("preco") or 0),
+                (valor_para_centavos(dados["custo_unitario"])
+                 if dados.get("custo_unitario") not in (None, "") else None),
                 int(dados.get("estoque_minimo") or 0),
                 int(dados.get("ponto_pedido") or 0),
                 int(dados.get("lead_time_dias") or 7),
@@ -1407,7 +2151,7 @@ def atualizar_parametros_produto(
         conn.execute(
             """
             UPDATE produtos
-            SET custo_unitario = ?,
+            SET custo_unitario_centavos = ?,
                 estoque_minimo = ?,
                 ponto_pedido = ?,
                 lead_time_dias = ?,
@@ -1417,7 +2161,7 @@ def atualizar_parametros_produto(
             WHERE id = ?
             """,
             (
-                custo_unitario,
+                valor_para_centavos(custo_unitario),
                 estoque_minimo,
                 ponto_pedido,
                 lead_time_dias,
@@ -1443,8 +2187,8 @@ def registrar_entrada_estoque(
     with get_conn() as conn:
         if custo_unitario is not None and custo_unitario > 0:
             conn.execute(
-                "UPDATE produtos SET custo_unitario = ? WHERE id = ?",
-                (custo_unitario, produto_id),
+                "UPDATE produtos SET custo_unitario_centavos = ? WHERE id = ?",
+                (valor_para_centavos(custo_unitario), produto_id),
             )
         return _registrar_movimentacao_estoque(
             conn,
@@ -1691,11 +2435,12 @@ def dashboard_top_vendidos(dias: int = 30, limit: int = 10) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT p.codigo, p.nome, COALESCE(SUM(ABS(m.quantidade)), 0) AS quantidade
-            FROM movimentacoes_estoque m
-            JOIN produtos p ON p.id = m.produto_id
-            WHERE m.tipo = 'VENDA'
-              AND m.data_iso >= ?
+            SELECT p.codigo, p.nome, COALESCE(SUM(i.quantidade), 0) AS quantidade
+            FROM vendas_itens i
+            JOIN vendas_cabecalho h ON h.id = i.venda_id
+            JOIN produtos p ON p.id = i.produto_id
+            WHERE h.status <> 'Cancelada'
+              AND h.data >= ?
             GROUP BY p.id, p.codigo, p.nome
             ORDER BY quantidade DESC
             LIMIT ?
@@ -1728,6 +2473,19 @@ def dashboard_movimentacoes_periodo(dias: int = 30) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def snapshot_dashboard_estoque() -> dict:
+    """Return every dataset needed to render the stock dashboard."""
+    return {
+        "resumo": dashboard_resumo_estoque(),
+        "status": dashboard_status_estoque(),
+        "curva_abc": dashboard_curva_abc(),
+        "categorias": dashboard_valor_por_categoria(),
+        "valor_parado": dashboard_top_valor_parado(),
+        "vendidos": dashboard_top_vendidos(),
+        "movimentacoes": dashboard_movimentacoes_periodo(),
+    }
+
+
 def opcoes_produtos(campo: str) -> list[str]:
     if campo not in {"categoria", "fornecedor"}:
         raise ValueError("Campo de opcoes invalido.")
@@ -1748,17 +2506,34 @@ def totais_periodo(periodo_id: int) -> dict:
     with get_conn() as conn:
         row = conn.execute(
             """
-            SELECT COUNT(DISTINCT num_venda) AS transacoes,
-                   COALESCE(SUM(subtotal), 0) AS total
-            FROM vendas
-            WHERE periodo_id = ?
-              AND status <> 'cancelled'
+            SELECT COUNT(DISTINCT h.id) AS transacoes,
+                   COALESCE(SUM(i.subtotal_centavos), 0) AS total_centavos
+            FROM vendas_cabecalho h
+            JOIN vendas_itens i ON i.venda_id = h.id
+            WHERE h.periodo_id = ?
+              AND h.status <> 'Cancelada'
             """,
             (periodo_id,),
         ).fetchone()
+        correcoes = conn.execute(
+            "SELECT COUNT(*) FROM vendas_correcoes WHERE periodo_id = ?",
+            (periodo_id,),
+        ).fetchone()[0]
     return {
         "transacoes": row["transacoes"] or 0,
-        "total": row["total"] or 0.0,
+        "total": int(row["total_centavos"] or 0) / 100,
+        "correcoes": int(correcoes or 0),
+    }
+
+
+def contexto_inicial_venda_no_caixa(data: str) -> dict:
+    """Retorne o contexto inicial completo da Tela de venda em um contrato."""
+    periodo = obter_ou_criar_periodo_aberto(data)
+    return {
+        "periodo": dict(periodo),
+        "totais": totais_periodo(periodo["id"]),
+        "proximo_num_venda": proximo_num_venda(periodo["id"]),
+        "destinos": [dict(row) for row in listar_destinos_financeiros()],
     }
 
 
@@ -1767,14 +2542,48 @@ def resumo_do_periodo(periodo_id: int) -> dict:
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT pagamento,
-                   COUNT(DISTINCT num_venda) AS transacoes,
-                   SUM(subtotal) AS total
-            FROM vendas
-            WHERE periodo_id = ?
-              AND status <> 'cancelled'
-            GROUP BY pagamento
+            SELECT p.forma AS pagamento,
+                   COUNT(DISTINCT h.id) AS transacoes,
+                   SUM(p.valor_centavos) / 100.0 AS total
+            FROM vendas_cabecalho h
+            JOIN pagamentos_venda p ON p.venda_id = h.id
+            WHERE h.periodo_id = ?
+              AND h.status <> 'Cancelada'
+            GROUP BY p.forma
             """,
             (periodo_id,),
         ).fetchall()
     return {row["pagamento"]: dict(row) for row in rows}
+
+
+def indicadores_produtos_estoque() -> list[dict]:
+    """Calcula indicadores completos sem expor conexão à tela."""
+    from app.estoque import calculos
+
+    produtos = listar_produtos_estoque(incluir_inativos=True)
+    with get_conn() as conn:
+        return calculos.indicadores_produtos(conn, produtos, configuracoes())
+
+
+def snapshot_operacional_estoque() -> dict:
+    """Return products and local filter options in one coherent payload."""
+    return {
+        "produtos": indicadores_produtos_estoque(),
+        "categorias": opcoes_produtos("categoria"),
+        "fornecedores": opcoes_produtos("fornecedor"),
+    }
+
+
+def recalcular_curva_abc() -> int:
+    """Recalcula curva ABC no servidor central."""
+    from app.estoque import calculos
+
+    with get_conn() as conn:
+        return calculos.classificar_abc(conn, configuracoes())
+
+
+def ultimo_periodo_id() -> int:
+    """Retorna identificador do período mais recente."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT id FROM periodos_caixa ORDER BY id DESC LIMIT 1").fetchone()
+        return int(row["id"]) if row else 1

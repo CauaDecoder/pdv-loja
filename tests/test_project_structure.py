@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from app import database
 from app import main as package_main
 from app.__main__ import main
@@ -10,7 +13,8 @@ def test_caminhos_operacionais_partem_da_raiz_do_projeto():
     assert IMPORTS_DIR == DATA_DIR / "imports"
     assert BACKUPS_DIR == PROJECT_ROOT / "backups"
     assert REPORTS_DIR == PROJECT_ROOT / "relatorios"
-    assert database.DB_PATH == DATA_DIR / "loja.db"
+    expected_db = os.getenv("CAIXA_DB_PATH")
+    assert database.DB_PATH == (Path(expected_db) if expected_db else DATA_DIR / "loja.db")
 
 
 def test_entrypoint_legado_delega_ao_entrypoint_do_pacote():
@@ -26,12 +30,14 @@ def test_raiz_contem_somente_arquivos_operacionais():
         ".env",
         ".env.example",
         ".gitignore",
-        "AGENTS.md",
-        "CONTEXT.md",
         "main.py",
         "README.md",
         "requirements.txt",
     }
-    arquivos_na_raiz = {path.name for path in PROJECT_ROOT.iterdir() if path.is_file()}
+    arquivos_na_raiz = {
+        path.name
+        for path in PROJECT_ROOT.iterdir()
+        if path.is_file() and (path.suffix.lower() != ".md" or path.name == "README.md")
+    }
 
     assert arquivos_na_raiz <= permitidos

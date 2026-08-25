@@ -77,8 +77,8 @@ class ConfiguracoesUITest(unittest.TestCase):
             with database.get_conn() as conn:
                 conn.execute(
                     """
-                    INSERT INTO produtos (codigo, nome, preco, estoque)
-                    VALUES ('TEMA', 'Produto Tema', 10, 5)
+                    INSERT INTO produtos (codigo, nome, preco_centavos, estoque)
+                    VALUES ('TEMA', 'Produto Tema', 1000, 5)
                     """
                 )
             fundos_claros = {
